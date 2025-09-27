@@ -1,2 +1,3 @@
 # 概要
-nutfesmap配車サービス
+nutfesmap
+技大祭案内アプリ
