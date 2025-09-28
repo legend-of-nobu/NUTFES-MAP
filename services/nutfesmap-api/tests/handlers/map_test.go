@@ -40,6 +40,7 @@ func setupEchoWithMock(t *testing.T) (*echo.Echo, sqlmock.Sqlmock, func()) {
 	e.GET("/maps/index", mapH.Index)
 	e.GET("/maps/:mapId", mapH.Show)
 	e.PATCH("/maps/:mapId", mapH.Update)
+	e.DELETE("/maps/:mapId", mapH.Delete)
 
 	cleanup := func() {
 		_ = db.Close()
@@ -847,6 +848,221 @@ func TestMapHandler_Update_UpdateExecError(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+// --- DELETE /maps/:mapId ---
+
+func TestMapHandler_Delete_OK(t *testing.T) {
+	e, mock, cleanup := setupEchoWithMock(t)
+	defer cleanup()
+
+	// ★ setupEchoWithMock に e.DELETE を追加済みであることが前提
+
+	rootID := "map_root"
+
+	// DeleteCascade の内部SQLに対応する期待値
+	mock.ExpectBegin()
+
+	// 存在確認
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*)
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(rootID).
+		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(1))
+
+	// pins 削除
+	mock.ExpectExec(regexp.QuoteMeta(`
+		WITH RECURSIVE submaps AS (
+			SELECT id
+			  FROM maps
+			 WHERE id = ? AND deleted_at IS NULL
+			UNION ALL
+			SELECT m.id
+			  FROM maps m
+			  JOIN submaps s ON m.parent_map_id = s.id
+			 WHERE m.deleted_at IS NULL
+		)
+		DELETE p FROM pins p
+		JOIN submaps sm ON p.map_id = sm.id
+	`)).
+		WithArgs(rootID).
+		WillReturnResult(sqlmock.NewResult(0, 4)) // 4件削除想定
+
+	// maps 削除
+	mock.ExpectExec(regexp.QuoteMeta(`
+		WITH RECURSIVE submaps AS (
+			SELECT id
+			  FROM maps
+			 WHERE id = ? AND deleted_at IS NULL
+			UNION ALL
+			SELECT m.id
+			  FROM maps m
+			  JOIN submaps s ON m.parent_map_id = s.id
+			 WHERE m.deleted_at IS NULL
+		)
+		DELETE m FROM maps m
+		JOIN submaps sm ON m.id = sm.id
+	`)).
+		WithArgs(rootID).
+		WillReturnResult(sqlmock.NewResult(0, 3)) // 3件削除想定
+
+	mock.ExpectCommit()
+
+	req := httptest.NewRequest(http.MethodDelete, "/maps/"+rootID, nil)
+	rec := httptest.NewRecorder()
+
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestMapHandler_Delete_NotFound(t *testing.T) {
+	e, mock, cleanup := setupEchoWithMock(t)
+	defer cleanup()
+
+	missing := "map_missing"
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*)
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(missing).
+		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(0))
+	mock.ExpectRollback()
+
+	req := httptest.NewRequest(http.MethodDelete, "/maps/"+missing, nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestMapHandler_Delete_PinsDeleteError(t *testing.T) {
+	e, mock, cleanup := setupEchoWithMock(t)
+	defer cleanup()
+
+	id := "map_err_pins"
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*)
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(id).
+		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(1))
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		WITH RECURSIVE submaps AS (
+			SELECT id
+			  FROM maps
+			 WHERE id = ? AND deleted_at IS NULL
+			UNION ALL
+			SELECT m.id
+			  FROM maps m
+			  JOIN submaps s ON m.parent_map_id = s.id
+			 WHERE m.deleted_at IS NULL
+		)
+		DELETE p FROM pins p
+		JOIN submaps sm ON p.map_id = sm.id
+	`)).
+		WithArgs(id).
+		WillReturnError(assertErr("delete pins failed"))
+
+	mock.ExpectRollback()
+
+	req := httptest.NewRequest(http.MethodDelete, "/maps/"+id, nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	// handler.Delete は no rows 以外のエラーはそのまま返す → Echo が 500 にする
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestMapHandler_Delete_CommitError(t *testing.T) {
+	e, mock, cleanup := setupEchoWithMock(t)
+	defer cleanup()
+
+	id := "map_commit_err"
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*)
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(id).
+		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(1))
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		WITH RECURSIVE submaps AS (
+			SELECT id
+			  FROM maps
+			 WHERE id = ? AND deleted_at IS NULL
+			UNION ALL
+			SELECT m.id
+			  FROM maps m
+			  JOIN submaps s ON m.parent_map_id = s.id
+			 WHERE m.deleted_at IS NULL
+		)
+		DELETE p FROM pins p
+		JOIN submaps sm ON p.map_id = sm.id
+	`)).
+		WithArgs(id).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		WITH RECURSIVE submaps AS (
+			SELECT id
+			  FROM maps
+			 WHERE id = ? AND deleted_at IS NULL
+			UNION ALL
+			SELECT m.id
+			  FROM maps m
+			  JOIN submaps s ON m.parent_map_id = s.id
+			 WHERE m.deleted_at IS NULL
+		)
+		DELETE m FROM maps m
+		JOIN submaps sm ON m.id = sm.id
+	`)).
+		WithArgs(id).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	mock.ExpectCommit().WillReturnError(assertErr("commit failed"))
+
+	req := httptest.NewRequest(http.MethodDelete, "/maps/"+id, nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
 	}
 }
 

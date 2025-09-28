@@ -475,6 +475,90 @@ func (r *MapRepository) UpdatePartial(ctx context.Context, id string, req *MapUp
 	return r.FindMapResponseByID(ctx, id)
 }
 
+// DeleteCascade は、指定 mapId のマップと、その配下の全ての子マップ・各マップに紐づくピンを再帰的に削除する。
+// - 削除対象が存在しなければ sql.ErrNoRows を返す
+// - 成功時は (mapsDeleted, pinsDeleted, nil) を返す
+// 注意: 物理削除（DELETE）です。FKで ON DELETE CASCADE を張っている場合は pins の明示削除は不要だが、
+//
+//	DB設定に依存しないよう先に pins を明示的に削除してから maps を削除している。
+func (r *MapRepository) DeleteCascade(ctx context.Context, rootID string) (int64, int64, error) {
+	tx, err := r.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() {
+		// パニック時ロールバック
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			panic(p)
+		}
+	}()
+
+	// 1) 対象存在チェック（deleted_at IS NULL のアクティブなもの）
+	var exists int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`, rootID).Scan(&exists); err != nil {
+		_ = tx.Rollback()
+		return 0, 0, err
+	}
+	if exists == 0 {
+		_ = tx.Rollback()
+		return 0, 0, sql.ErrNoRows
+	}
+
+	// 2) pins を削除（対象サブツリーに属する map_id のみ）
+	//    再帰CTEで配下のID集合を構築
+	resPins, err := tx.ExecContext(ctx, `
+		WITH RECURSIVE submaps AS (
+			SELECT id
+			  FROM maps
+			 WHERE id = ? AND deleted_at IS NULL
+			UNION ALL
+			SELECT m.id
+			  FROM maps m
+			  JOIN submaps s ON m.parent_map_id = s.id
+			 WHERE m.deleted_at IS NULL
+		)
+		DELETE p FROM pins p
+		JOIN submaps sm ON p.map_id = sm.id
+	`, rootID)
+	if err != nil {
+		_ = tx.Rollback()
+		return 0, 0, err
+	}
+	pinsDeleted, _ := resPins.RowsAffected()
+
+	// 3) maps を削除（サブツリー全体）
+	resMaps, err := tx.ExecContext(ctx, `
+		WITH RECURSIVE submaps AS (
+			SELECT id
+			  FROM maps
+			 WHERE id = ? AND deleted_at IS NULL
+			UNION ALL
+			SELECT m.id
+			  FROM maps m
+			  JOIN submaps s ON m.parent_map_id = s.id
+			 WHERE m.deleted_at IS NULL
+		)
+		DELETE m FROM maps m
+		JOIN submaps sm ON m.id = sm.id
+	`, rootID)
+	if err != nil {
+		_ = tx.Rollback()
+		return 0, 0, err
+	}
+	mapsDeleted, _ := resMaps.RowsAffected()
+
+	if err := tx.Commit(); err != nil {
+		return 0, 0, err
+	}
+	return mapsDeleted, pinsDeleted, nil
+}
+
 // p_id: プレーンな親IDを返すだけ（将来の前処理フック用に分離）
 func p_id(s string) string { return s }
 

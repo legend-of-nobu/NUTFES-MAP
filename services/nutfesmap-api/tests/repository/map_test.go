@@ -1007,3 +1007,294 @@ func TestMapRepository_UpdatePartial_UpdateExecError(t *testing.T) {
 		t.Fatalf("unmet expectations: %v", err)
 	}
 }
+
+// --- DeleteCascade (DELETE) ---
+
+func TestMapRepository_DeleteCascade_OK(t *testing.T) {
+	r, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	rootID := "map_root"
+
+	// Tx begin
+	mock.ExpectBegin()
+
+	// 1) 存在確認: COUNT(*)=1
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*)
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(rootID).
+		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(1))
+
+	// 2) pins 削除（再帰CTE）
+	mock.ExpectExec(regexp.QuoteMeta(`
+		WITH RECURSIVE submaps AS (
+			SELECT id
+			  FROM maps
+			 WHERE id = ? AND deleted_at IS NULL
+			UNION ALL
+			SELECT m.id
+			  FROM maps m
+			  JOIN submaps s ON m.parent_map_id = s.id
+			 WHERE m.deleted_at IS NULL
+		)
+		DELETE p FROM pins p
+		JOIN submaps sm ON p.map_id = sm.id
+	`)).
+		WithArgs(rootID).
+		WillReturnResult(sqlmock.NewResult(0, 5)) // pins 5件削除
+
+	// 3) maps 削除（再帰CTE）
+	mock.ExpectExec(regexp.QuoteMeta(`
+		WITH RECURSIVE submaps AS (
+			SELECT id
+			  FROM maps
+			 WHERE id = ? AND deleted_at IS NULL
+			UNION ALL
+			SELECT m.id
+			  FROM maps m
+			  JOIN submaps s ON m.parent_map_id = s.id
+			 WHERE m.deleted_at IS NULL
+		)
+		DELETE m FROM maps m
+		JOIN submaps sm ON m.id = sm.id
+	`)).
+		WithArgs(rootID).
+		WillReturnResult(sqlmock.NewResult(0, 3)) // maps 3件削除（root+子2など想定）
+
+	// commit
+	mock.ExpectCommit()
+
+	mapsDel, pinsDel, err := r.DeleteCascade(context.Background(), rootID)
+	if err != nil {
+		t.Fatalf("DeleteCascade returned err: %v", err)
+	}
+	if mapsDel != 3 || pinsDel != 5 {
+		t.Fatalf("unexpected affected rows: maps=%d pins=%d", mapsDel, pinsDel)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestMapRepository_DeleteCascade_NotFound(t *testing.T) {
+	r, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	rootID := "missing"
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*)
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(rootID).
+		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(0))
+	mock.ExpectRollback()
+
+	mapsDel, pinsDel, err := r.DeleteCascade(context.Background(), rootID)
+	if err == nil {
+		t.Fatalf("expected sql.ErrNoRows, got nil; maps=%d pins=%d", mapsDel, pinsDel)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestMapRepository_DeleteCascade_ExistSelectError(t *testing.T) {
+	r, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	rootID := "map_x"
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*)
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(rootID).
+		WillReturnError(assertErr("exist select failed"))
+	mock.ExpectRollback()
+
+	_, _, err := r.DeleteCascade(context.Background(), rootID)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestMapRepository_DeleteCascade_DeletePinsError(t *testing.T) {
+	r, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	rootID := "map_err_pins"
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*)
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(rootID).
+		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(1))
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		WITH RECURSIVE submaps AS (
+			SELECT id
+			  FROM maps
+			 WHERE id = ? AND deleted_at IS NULL
+			UNION ALL
+			SELECT m.id
+			  FROM maps m
+			  JOIN submaps s ON m.parent_map_id = s.id
+			 WHERE m.deleted_at IS NULL
+		)
+		DELETE p FROM pins p
+		JOIN submaps sm ON p.map_id = sm.id
+	`)).
+		WithArgs(rootID).
+		WillReturnError(assertErr("delete pins failed"))
+
+	mock.ExpectRollback()
+
+	_, _, err := r.DeleteCascade(context.Background(), rootID)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestMapRepository_DeleteCascade_DeleteMapsError(t *testing.T) {
+	r, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	rootID := "map_err_maps"
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*)
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(rootID).
+		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(1))
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		WITH RECURSIVE submaps AS (
+			SELECT id
+			  FROM maps
+			 WHERE id = ? AND deleted_at IS NULL
+			UNION ALL
+			SELECT m.id
+			  FROM maps m
+			  JOIN submaps s ON m.parent_map_id = s.id
+			 WHERE m.deleted_at IS NULL
+		)
+		DELETE p FROM pins p
+		JOIN submaps sm ON p.map_id = sm.id
+	`)).
+		WithArgs(rootID).
+		WillReturnResult(sqlmock.NewResult(0, 2))
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		WITH RECURSIVE submaps AS (
+			SELECT id
+			  FROM maps
+			 WHERE id = ? AND deleted_at IS NULL
+			UNION ALL
+			SELECT m.id
+			  FROM maps m
+			  JOIN submaps s ON m.parent_map_id = s.id
+			 WHERE m.deleted_at IS NULL
+		)
+		DELETE m FROM maps m
+		JOIN submaps sm ON m.id = sm.id
+	`)).
+		WithArgs(rootID).
+		WillReturnError(assertErr("delete maps failed"))
+
+	mock.ExpectRollback()
+
+	_, _, err := r.DeleteCascade(context.Background(), rootID)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestMapRepository_DeleteCascade_CommitError(t *testing.T) {
+	r, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	rootID := "map_commit_err"
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*)
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(rootID).
+		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(1))
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		WITH RECURSIVE submaps AS (
+			SELECT id
+			  FROM maps
+			 WHERE id = ? AND deleted_at IS NULL
+			UNION ALL
+			SELECT m.id
+			  FROM maps m
+			  JOIN submaps s ON m.parent_map_id = s.id
+			 WHERE m.deleted_at IS NULL
+		)
+		DELETE p FROM pins p
+		JOIN submaps sm ON p.map_id = sm.id
+	`)).
+		WithArgs(rootID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		WITH RECURSIVE submaps AS (
+			SELECT id
+			  FROM maps
+			 WHERE id = ? AND deleted_at IS NULL
+			UNION ALL
+			SELECT m.id
+			  FROM maps m
+			  JOIN submaps s ON m.parent_map_id = s.id
+			 WHERE m.deleted_at IS NULL
+		)
+		DELETE m FROM maps m
+		JOIN submaps sm ON m.id = sm.id
+	`)).
+		WithArgs(rootID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	mock.ExpectCommit().WillReturnError(assertErr("commit failed"))
+
+	_, _, err := r.DeleteCascade(context.Background(), rootID)
+	if err == nil {
+		t.Fatalf("expected commit error, got nil")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}

@@ -274,3 +274,25 @@ func (h *MapHandler) Update(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, updated)
 }
+
+// DELETE /maps/:mapId
+func (h *MapHandler) Delete(c echo.Context) error {
+	mapID := strings.TrimSpace(c.Param("mapId"))
+	if mapID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "mapId is required")
+	}
+
+	ctx := c.Request().Context()
+	_, _, err := h.Repo.DeleteCascade(ctx, mapID)
+	if err != nil {
+		// 対象なし
+		if err.Error() == "sql: no rows in result set" {
+			return echo.NewHTTPError(http.StatusNotFound, "map not found")
+		}
+		// それ以外は内部エラーとして扱う（Echo 側で 500 にマップ）
+		return err
+	}
+
+	// 本体・子マップ・ピンを再帰的に削除済み
+	return c.NoContent(http.StatusNoContent)
+}
