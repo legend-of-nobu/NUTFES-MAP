@@ -450,6 +450,207 @@ func TestMapRepository_FindIndexAggregates_ChildQueryError(t *testing.T) {
 	}
 }
 
+func TestMapRepository_FindMapResponseByID_OK(t *testing.T) {
+	repo, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	id := "map_123"
+	now := time.Now().UTC()
+
+	// 1) 本体
+	mainCols := []string{
+		"id", "name", "image_data", "natural_width", "natural_height",
+		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
+	}
+	mainRow := sqlmock.NewRows(mainCols).AddRow(
+		id, "Campus 2025", "iVBORw0K...", 4096, 3072,
+		nil, true, 3, now, now, nil,
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(id).
+		WillReturnRows(mainRow)
+
+	// 2) 子件数
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*) FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL
+	`)).
+		WithArgs(id).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
+
+	// 3) 子一覧
+	childCols := []string{"id", "name", "has_floors", "floor_count"}
+	childRows := sqlmock.NewRows(childCols).
+		AddRow("map_201", "1F", false, 0).
+		AddRow("map_202", "2F", false, 0)
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, has_floors, floor_count
+		  FROM maps
+		 WHERE parent_map_id = ? AND deleted_at IS NULL
+		 ORDER BY name
+	`)).
+		WithArgs(id).
+		WillReturnRows(childRows)
+
+	// Act
+	res, err := repo.FindMapResponseByID(context.Background(), id)
+
+	// Assert
+	if err != nil {
+		t.Fatalf("FindMapResponseByID returned err: %v", err)
+	}
+	if res == nil {
+		t.Fatalf("FindMapResponseByID returned nil")
+	}
+	if res.ID != id ||
+		res.Name != "Campus 2025" ||
+		res.ImageData != "iVBORw0K..." ||
+		res.NaturalWidth != 4096 ||
+		res.NaturalHeight != 3072 ||
+		res.ParentMapID != nil ||
+		!res.HasFloors ||
+		res.FloorCount != 3 {
+		t.Fatalf("unexpected base fields: %+v", res)
+	}
+	if res.ChildrenCount != 2 || len(res.Children) != 2 {
+		t.Fatalf("unexpected children meta: count=%d len=%d", res.ChildrenCount, len(res.Children))
+	}
+	if res.Children[0].ID != "map_201" || res.Children[0].Name != "1F" {
+		t.Fatalf("unexpected first child: %+v", res.Children[0])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestMapRepository_FindMapResponseByID_NoRows(t *testing.T) {
+	repo, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	id := "map_not_found"
+
+	mainCols := []string{
+		"id", "name", "image_data", "natural_width", "natural_height",
+		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
+	}
+	// 0行（= sql.ErrNoRows）
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(id).
+		WillReturnRows(sqlmock.NewRows(mainCols))
+
+	res, err := repo.FindMapResponseByID(context.Background(), id)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if res != nil {
+		t.Fatalf("expected nil, got: %#v", res)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestMapRepository_FindMapResponseByID_QueryError(t *testing.T) {
+	repo, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	id := "map_123"
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(id).
+		WillReturnError(assertErr("select failed"))
+
+	res, err := repo.FindMapResponseByID(context.Background(), id)
+	if err == nil {
+		t.Fatalf("expected error, got nil; res=%#v", res)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestMapRepository_FindMapResponseByID_NoChildren(t *testing.T) {
+	repo, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	id := "map_123"
+	now := time.Now().UTC()
+
+	// 1) 本体
+	mainCols := []string{
+		"id", "name", "image_data", "natural_width", "natural_height",
+		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
+	}
+	mainRow := sqlmock.NewRows(mainCols).AddRow(
+		id, "Campus 2025", "iVBORw0K...", 4096, 3072,
+		nil, false, 0, now, now, nil,
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(id).
+		WillReturnRows(mainRow)
+
+	// 2) 子件数=0
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*) FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL
+	`)).
+		WithArgs(id).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+
+	// 3) 子一覧=0行
+	childCols := []string{"id", "name", "has_floors", "floor_count"}
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, has_floors, floor_count
+		  FROM maps
+		 WHERE parent_map_id = ? AND deleted_at IS NULL
+		 ORDER BY name
+	`)).
+		WithArgs(id).
+		WillReturnRows(sqlmock.NewRows(childCols))
+
+	// Act
+	res, err := repo.FindMapResponseByID(context.Background(), id)
+
+	// Assert
+	if err != nil {
+		t.Fatalf("FindMapResponseByID returned err: %v", err)
+	}
+	if res == nil {
+		t.Fatalf("FindMapResponseByID returned nil")
+	}
+	if res.ChildrenCount != 0 || len(res.Children) != 0 {
+		t.Fatalf("expected no children; got count=%d len=%d", res.ChildrenCount, len(res.Children))
+	}
+	if res.HasFloors || res.FloorCount != 0 {
+		t.Fatalf("unexpected floors flags: hasFloors=%v floorCount=%d", res.HasFloors, res.FloorCount)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 // --- helpers ---
 
 // assertErr はテスト内で分かりやすい固定エラーを作る小道具

@@ -96,9 +96,11 @@ func SetupRouter(cfg *Config) *echo.Echo {
 	usersG := e.Group("/users", csrfMW)
 	usersG.POST("/register", userH.Register)
 
+	// /maps 公開
 	mapsG := e.Group("/maps", csrfMW)
 	mapsG.POST("", mapH.Create)
 	mapsG.GET("/index", mapH.Index)
+	mapsG.GET("/:mapId", mapH.Show)
 
 	// /users 認証必須
 	jwtCfg := echojwt.Config{

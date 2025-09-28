@@ -38,6 +38,7 @@ func setupEchoWithMock(t *testing.T) (*echo.Echo, sqlmock.Sqlmock, func()) {
 	// ルーティング（本番と同じパス）
 	e.POST("/maps", mapH.Create)
 	e.GET("/maps/index", mapH.Index)
+	e.GET("/maps/:mapId", mapH.Show)
 
 	cleanup := func() {
 		_ = db.Close()
@@ -334,6 +335,210 @@ func TestMapHandler_Index_SQL_Error(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestMapHandler_Show_OK(t *testing.T) {
+	e, mock, cleanup := setupEchoWithMock(t)
+	defer cleanup()
+
+	id := "map_123"
+	now := time.Now().UTC()
+
+	// 1) 本体
+	mainCols := []string{
+		"id", "name", "image_data", "natural_width", "natural_height",
+		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
+	}
+	mainRow := sqlmock.NewRows(mainCols).AddRow(
+		id, "キャンパスマップ2025", "iVBORw0K...", 4096, 3072,
+		nil, true, 3, now, now, nil,
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(id).
+		WillReturnRows(mainRow)
+
+	// 2) 子件数
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*) FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL
+	`)).
+		WithArgs(id).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
+
+	// 3) 子一覧（順不同で返し、ハンドラー側の昇順ソートを検証）
+	childCols := []string{"id", "name", "has_floors", "floor_count"}
+	childRows := sqlmock.NewRows(childCols).
+		AddRow("map_b", "B2F", false, 0).
+		AddRow("map_a", "1F", false, 0)
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, has_floors, floor_count
+		  FROM maps
+		 WHERE parent_map_id = ? AND deleted_at IS NULL
+		 ORDER BY name
+	`)).
+		WithArgs(id).
+		WillReturnRows(childRows)
+
+	// --- 実行 ---
+	req := httptest.NewRequest(http.MethodGet, "/maps/"+id, nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	// --- 検証 ---
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if etag := rec.Header().Get("ETag"); etag == "" {
+		t.Fatalf("ETag header must be set")
+	}
+
+	var resp handlers.MapResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json unmarshal error: %v, body=%s", err, rec.Body.String())
+	}
+	if resp.ID != id || resp.Name != "キャンパスマップ2025" {
+		t.Fatalf("unexpected base fields: %+v", resp)
+	}
+	if resp.ChildrenCount != 2 || len(resp.Children) != 2 {
+		t.Fatalf("unexpected children meta: %+v", resp.Children)
+	}
+	// ソート結果は "1F", "B2F"
+	if resp.Children[0].Name != "1F" || resp.Children[1].Name != "B2F" {
+		t.Fatalf("children not sorted asc by name: %+v", resp.Children)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestMapHandler_Show_NotFound(t *testing.T) {
+	e, mock, cleanup := setupEchoWithMock(t)
+	defer cleanup()
+
+	id := "map_not_found"
+	mainCols := []string{
+		"id", "name", "image_data", "natural_width", "natural_height",
+		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
+	}
+	// 0行（= sql.ErrNoRows 相当）
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(id).
+		WillReturnRows(sqlmock.NewRows(mainCols))
+
+	req := httptest.NewRequest(http.MethodGet, "/maps/"+id, nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestMapHandler_Show_QueryError(t *testing.T) {
+	e, mock, cleanup := setupEchoWithMock(t)
+	defer cleanup()
+
+	id := "map_123"
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(id).
+		WillReturnError(assertErr("select failed"))
+
+	req := httptest.NewRequest(http.MethodGet, "/maps/"+id, nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestMapHandler_Show_NoChildren(t *testing.T) {
+	e, mock, cleanup := setupEchoWithMock(t)
+	defer cleanup()
+
+	id := "map_123"
+	now := time.Now().UTC()
+
+	// 本体
+	mainCols := []string{
+		"id", "name", "image_data", "natural_width", "natural_height",
+		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
+	}
+	mainRow := sqlmock.NewRows(mainCols).AddRow(
+		id, "Empty Child Map", "AAAA", 1024, 768,
+		nil, false, 0, now, now, nil,
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(id).
+		WillReturnRows(mainRow)
+
+	// 子件数=0
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*) FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL
+	`)).
+		WithArgs(id).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+
+	// 子一覧=0
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, has_floors, floor_count
+		  FROM maps
+		 WHERE parent_map_id = ? AND deleted_at IS NULL
+		 ORDER BY name
+	`)).
+		WithArgs(id).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "has_floors", "floor_count"}))
+
+	req := httptest.NewRequest(http.MethodGet, "/maps/"+id, nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp handlers.MapResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json unmarshal error: %v, body=%s", err, rec.Body.String())
+	}
+	if resp.ChildrenCount != 0 || len(resp.Children) != 0 {
+		t.Fatalf("expected no children, got: %+v", resp.Children)
+	}
+	if resp.HasFloors || resp.FloorCount != 0 {
+		t.Fatalf("unexpected floor flags: hasFloors=%v floorCount=%d", resp.HasFloors, resp.FloorCount)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)

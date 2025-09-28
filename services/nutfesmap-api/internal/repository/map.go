@@ -252,5 +252,51 @@ func buildParentInQuery(tmpl string, ids []string) (string, []any) {
 	return q, args
 }
 
+// --- 地図メタ取得（/maps/{mapId} GET）用: Aggregate -> Response 変換付きの取得関数を追加 ---
+
+// FindMapResponseByID は、指定IDの Map 本体と直下の子メタ情報をまとめて取得し、外部契約DTOに整形して返す。
+// 見つからなかった場合は (nil, nil) を返す。
+func (r *MapRepository) FindMapResponseByID(ctx context.Context, id string) (*MapResponse, error) {
+	ag, err := r.FindAggregate(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if ag == nil || ag.Base == nil {
+		return nil, nil
+	}
+	return toMapResponse(ag), nil
+}
+
+// 内部: MapAggregate を MapResponse に詰め替える
+func toMapResponse(ag *MapAggregate) *MapResponse {
+	base := ag.Base
+
+	// 子の軽量一覧を DTO に詰め替え
+	children := make([]MapChildRefDTO, 0, len(ag.Children))
+	for _, c := range ag.Children {
+		children = append(children, MapChildRefDTO{
+			ID:         c.ID,
+			Name:       c.Name,
+			HasFloors:  c.HasFloors,
+			FloorCount: c.FloorCount,
+		})
+	}
+
+	return &MapResponse{
+		ID:            base.ID,
+		Name:          base.Name,
+		ImageData:     base.ImageData,
+		NaturalWidth:  base.NaturalWidth,
+		NaturalHeight: base.NaturalHeight,
+		ParentMapID:   base.ParentMapID,
+		HasFloors:     base.HasFloors,
+		FloorCount:    base.FloorCount,
+		ChildrenCount: ag.ChildrenCount,
+		Children:      children,
+		CreatedAt:     base.CreatedAt,
+		ModifiedAt:    base.ModifiedAt,
+	}
+}
+
 // p_id: プレーンな親IDを返すだけ（将来の前処理フック用に分離）
 func p_id(s string) string { return s }

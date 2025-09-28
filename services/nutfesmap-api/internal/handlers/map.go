@@ -200,3 +200,34 @@ func (h *MapHandler) Index(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, MapsIndexResponse{Items: items})
 }
+
+// GET /maps/:mapId （地図メタ取得）
+func (h *MapHandler) Show(c echo.Context) error {
+	mapID := strings.TrimSpace(c.Param("mapId"))
+	if mapID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "mapId is required")
+	}
+
+	ctx := c.Request().Context()
+	res, err := h.Repo.FindMapResponseByID(ctx, mapID)
+	if err != nil {
+		return err
+	}
+	if res == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "map not found")
+	}
+
+	// 子は名前昇順で安定化
+	sort.Slice(res.Children, func(i, j int) bool {
+		return res.Children[i].Name < res.Children[j].Name
+	})
+
+	// 単体ETag: ID + ModifiedAt
+	hash := sha256.New()
+	hash.Write([]byte(res.ID))
+	hash.Write([]byte(res.ModifiedAt.UTC().Format(time.RFC3339Nano)))
+	etag := `W/"` + hex.EncodeToString(hash.Sum(nil)) + `"`
+	c.Response().Header().Set("ETag", etag)
+
+	return c.JSON(http.StatusOK, res)
+}
