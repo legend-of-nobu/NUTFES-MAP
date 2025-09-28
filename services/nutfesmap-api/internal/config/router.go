@@ -32,6 +32,7 @@ func SetupRouter(cfg *Config) *echo.Echo {
 
 	userRepo := &repository.UserRepository{DB: db}
 	rtRepo := &repository.RefreshTokenRepository{DB: db}
+	mapRepo := repository.NewMapRepository(db)
 
 	cookieCfg := handlers.CookieConf{
 		Name:     cfg.CookieNameRT,
@@ -42,6 +43,7 @@ func SetupRouter(cfg *Config) *echo.Echo {
 	}
 	authH := handlers.NewAuthHandler(userRepo, rtRepo, cfg.JWTSigningKey, cfg.AccessTokenTTLMin, cfg.RefreshTokenTTLH, cookieCfg)
 	userH := handlers.NewUserHandler(userRepo)
+	mapH := handlers.NewMapHandler(mapRepo)
 
 	// Echo標準ミドルウェア
 	e.Use(echoMW.Logger())
@@ -93,6 +95,9 @@ func SetupRouter(cfg *Config) *echo.Echo {
 	// /users 公開
 	usersG := e.Group("/users", csrfMW)
 	usersG.POST("/register", userH.Register)
+
+	mapsG := e.Group("/maps", csrfMW)
+	mapsG.POST("", mapH.Create)
 
 	// /users 認証必須
 	jwtCfg := echojwt.Config{
