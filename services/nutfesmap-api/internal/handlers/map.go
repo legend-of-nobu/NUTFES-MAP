@@ -79,7 +79,7 @@ func (h *MapHandler) Create(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "floorCount must be >= 1 when hasFloors=true")
 	}
 
-	newID := "map_" + uuid.NewString()
+	newID := uuid.NewString()
 	m := &model.Map{
 		ID:            newID,
 		Name:          req.Name,
@@ -203,7 +203,7 @@ func (h *MapHandler) Index(c echo.Context) error {
 
 // GET /maps/:mapId （地図メタ取得）
 func (h *MapHandler) Show(c echo.Context) error {
-	mapID := strings.TrimSpace(c.Param("mapId"))
+	mapID := c.Param("mapId")
 	if mapID == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "mapId is required")
 	}
@@ -233,7 +233,7 @@ func (h *MapHandler) Show(c echo.Context) error {
 }
 
 func (h *MapHandler) Update(c echo.Context) error {
-	mapID := strings.TrimSpace(c.Param("mapId"))
+	mapID := c.Param("mapId")
 	if mapID == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "mapId is required")
 	}
@@ -277,7 +277,7 @@ func (h *MapHandler) Update(c echo.Context) error {
 
 // DELETE /maps/:mapId
 func (h *MapHandler) Delete(c echo.Context) error {
-	mapID := strings.TrimSpace(c.Param("mapId"))
+	mapID := c.Param("mapId")
 	if mapID == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "mapId is required")
 	}
