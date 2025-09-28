@@ -7,25 +7,33 @@ import (
 	"time"
 
 	"nutfesmap/internal/model"
-	repo "nutfesmap/internal/repository"
+	repository "nutfesmap/internal/repository"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-func newMock(t *testing.T) (*repo.MapRepository, sqlmock.Sqlmock, func()) {
+// --- helpers ---
+
+// newMock は MapRepository と sqlmock をまとめて返す
+func newMock(t *testing.T) (*repository.MapRepository, sqlmock.Sqlmock, func()) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
 	}
-	repo := repo.NewMapRepository(db)
-	cleanup := func() {
-		_ = db.Close()
-	}
-	return repo, mock, cleanup
+	r := repository.NewMapRepository(db)
+	cleanup := func() { _ = db.Close() }
+	return r, mock, cleanup
 }
 
+// assertErr はテスト内で分かりやすい固定エラーを作る小道具
+type assertErr string
+
+func (e assertErr) Error() string { return string(e) }
+
+// --- Insert ---
+
 func TestMapRepository_Insert_OK(t *testing.T) {
-	repo, mock, cleanup := newMock(t)
+	r, mock, cleanup := newMock(t)
 	defer cleanup()
 
 	// Arrange
@@ -54,7 +62,7 @@ func TestMapRepository_Insert_OK(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// Act
-	err := repo.Insert(context.Background(), m)
+	err := r.Insert(context.Background(), m)
 
 	// Assert
 	if err != nil {
@@ -66,7 +74,7 @@ func TestMapRepository_Insert_OK(t *testing.T) {
 }
 
 func TestMapRepository_Insert_ExecError(t *testing.T) {
-	repo, mock, cleanup := newMock(t)
+	r, mock, cleanup := newMock(t)
 	defer cleanup()
 
 	m := &model.Map{
@@ -91,7 +99,7 @@ func TestMapRepository_Insert_ExecError(t *testing.T) {
 		).
 		WillReturnError(assertErr("insert failed"))
 
-	err := repo.Insert(context.Background(), m)
+	err := r.Insert(context.Background(), m)
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
@@ -100,8 +108,10 @@ func TestMapRepository_Insert_ExecError(t *testing.T) {
 	}
 }
 
+// --- FindAggregate ---
+
 func TestMapRepository_FindAggregate_OK(t *testing.T) {
-	repo, mock, cleanup := newMock(t)
+	r, mock, cleanup := newMock(t)
 	defer cleanup()
 
 	id := "map_123"
@@ -147,7 +157,7 @@ func TestMapRepository_FindAggregate_OK(t *testing.T) {
 		WillReturnRows(childRows)
 
 	// Act
-	agg, err := repo.FindAggregate(context.Background(), id)
+	agg, err := r.FindAggregate(context.Background(), id)
 
 	// Assert
 	if err != nil {
@@ -165,7 +175,7 @@ func TestMapRepository_FindAggregate_OK(t *testing.T) {
 }
 
 func TestMapRepository_FindAggregate_NoRows(t *testing.T) {
-	repo, mock, cleanup := newMock(t)
+	r, mock, cleanup := newMock(t)
 	defer cleanup()
 
 	id := "map_not_found"
@@ -173,7 +183,7 @@ func TestMapRepository_FindAggregate_NoRows(t *testing.T) {
 		"id", "name", "image_data", "natural_width", "natural_height",
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
 	}
-	// 0行を返す → sql.ErrNoRows になる
+	// 0行を返す → nil
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, name, image_data, natural_width, natural_height,
 		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
@@ -184,7 +194,7 @@ func TestMapRepository_FindAggregate_NoRows(t *testing.T) {
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows(mainCols))
 
-	agg, err := repo.FindAggregate(context.Background(), id)
+	agg, err := r.FindAggregate(context.Background(), id)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -197,7 +207,7 @@ func TestMapRepository_FindAggregate_NoRows(t *testing.T) {
 }
 
 func TestMapRepository_FindAggregate_QueryError(t *testing.T) {
-	repo, mock, cleanup := newMock(t)
+	r, mock, cleanup := newMock(t)
 	defer cleanup()
 
 	id := "map_123"
@@ -211,7 +221,7 @@ func TestMapRepository_FindAggregate_QueryError(t *testing.T) {
 		WithArgs(id).
 		WillReturnError(assertErr("select failed"))
 
-	agg, err := repo.FindAggregate(context.Background(), id)
+	agg, err := r.FindAggregate(context.Background(), id)
 	if err == nil {
 		t.Fatalf("expected error, got nil; agg=%#v", agg)
 	}
@@ -220,8 +230,10 @@ func TestMapRepository_FindAggregate_QueryError(t *testing.T) {
 	}
 }
 
+// --- FindIndexAggregates ---
+
 func TestMapRepository_FindIndexAggregates_OK(t *testing.T) {
-	repo, mock, cleanup := newMock(t)
+	r, mock, cleanup := newMock(t)
 	defer cleanup()
 
 	now := time.Now().UTC()
@@ -278,7 +290,7 @@ func TestMapRepository_FindIndexAggregates_OK(t *testing.T) {
 		WillReturnRows(childRows)
 
 	// Act
-	ags, err := repo.FindIndexAggregates(context.Background())
+	ags, err := r.FindIndexAggregates(context.Background())
 
 	// Assert
 	if err != nil {
@@ -303,7 +315,7 @@ func TestMapRepository_FindIndexAggregates_OK(t *testing.T) {
 }
 
 func TestMapRepository_FindIndexAggregates_NoParents(t *testing.T) {
-	repo, mock, cleanup := newMock(t)
+	r, mock, cleanup := newMock(t)
 	defer cleanup()
 
 	parentCols := []string{
@@ -320,7 +332,7 @@ func TestMapRepository_FindIndexAggregates_NoParents(t *testing.T) {
 		 ORDER BY created_at DESC
 	`)).WillReturnRows(sqlmock.NewRows(parentCols))
 
-	ags, err := repo.FindIndexAggregates(context.Background())
+	ags, err := r.FindIndexAggregates(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -333,7 +345,7 @@ func TestMapRepository_FindIndexAggregates_NoParents(t *testing.T) {
 }
 
 func TestMapRepository_FindIndexAggregates_ParentQueryError(t *testing.T) {
-	repo, mock, cleanup := newMock(t)
+	r, mock, cleanup := newMock(t)
 	defer cleanup()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
@@ -345,7 +357,7 @@ func TestMapRepository_FindIndexAggregates_ParentQueryError(t *testing.T) {
 		 ORDER BY created_at DESC
 	`)).WillReturnError(assertErr("parent select failed"))
 
-	ags, err := repo.FindIndexAggregates(context.Background())
+	ags, err := r.FindIndexAggregates(context.Background())
 	if err == nil {
 		t.Fatalf("expected error, got nil; ags=%#v", ags)
 	}
@@ -355,7 +367,7 @@ func TestMapRepository_FindIndexAggregates_ParentQueryError(t *testing.T) {
 }
 
 func TestMapRepository_FindIndexAggregates_CountQueryError(t *testing.T) {
-	repo, mock, cleanup := newMock(t)
+	r, mock, cleanup := newMock(t)
 	defer cleanup()
 
 	now := time.Now().UTC()
@@ -386,7 +398,7 @@ func TestMapRepository_FindIndexAggregates_CountQueryError(t *testing.T) {
 		WithArgs("p1", "p2").
 		WillReturnError(assertErr("count select failed"))
 
-	ags, err := repo.FindIndexAggregates(context.Background())
+	ags, err := r.FindIndexAggregates(context.Background())
 	if err == nil {
 		t.Fatalf("expected error, got nil; ags=%#v", ags)
 	}
@@ -396,7 +408,7 @@ func TestMapRepository_FindIndexAggregates_CountQueryError(t *testing.T) {
 }
 
 func TestMapRepository_FindIndexAggregates_ChildQueryError(t *testing.T) {
-	repo, mock, cleanup := newMock(t)
+	r, mock, cleanup := newMock(t)
 	defer cleanup()
 
 	now := time.Now().UTC()
@@ -441,7 +453,7 @@ func TestMapRepository_FindIndexAggregates_ChildQueryError(t *testing.T) {
 		WithArgs("p1", "p2").
 		WillReturnError(assertErr("children select failed"))
 
-	ags, err := repo.FindIndexAggregates(context.Background())
+	ags, err := r.FindIndexAggregates(context.Background())
 	if err == nil {
 		t.Fatalf("expected error, got nil; ags=%#v", ags)
 	}
@@ -450,8 +462,10 @@ func TestMapRepository_FindIndexAggregates_ChildQueryError(t *testing.T) {
 	}
 }
 
+// --- FindMapResponseByID ---
+
 func TestMapRepository_FindMapResponseByID_OK(t *testing.T) {
-	repo, mock, cleanup := newMock(t)
+	r, mock, cleanup := newMock(t)
 	defer cleanup()
 
 	id := "map_123"
@@ -498,7 +512,7 @@ func TestMapRepository_FindMapResponseByID_OK(t *testing.T) {
 		WillReturnRows(childRows)
 
 	// Act
-	res, err := repo.FindMapResponseByID(context.Background(), id)
+	res, err := r.FindMapResponseByID(context.Background(), id)
 
 	// Assert
 	if err != nil {
@@ -529,7 +543,7 @@ func TestMapRepository_FindMapResponseByID_OK(t *testing.T) {
 }
 
 func TestMapRepository_FindMapResponseByID_NoRows(t *testing.T) {
-	repo, mock, cleanup := newMock(t)
+	r, mock, cleanup := newMock(t)
 	defer cleanup()
 
 	id := "map_not_found"
@@ -538,7 +552,7 @@ func TestMapRepository_FindMapResponseByID_NoRows(t *testing.T) {
 		"id", "name", "image_data", "natural_width", "natural_height",
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
 	}
-	// 0行（= sql.ErrNoRows）
+	// 0行（= nil）
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, name, image_data, natural_width, natural_height,
 		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
@@ -549,7 +563,7 @@ func TestMapRepository_FindMapResponseByID_NoRows(t *testing.T) {
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows(mainCols))
 
-	res, err := repo.FindMapResponseByID(context.Background(), id)
+	res, err := r.FindMapResponseByID(context.Background(), id)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -562,7 +576,7 @@ func TestMapRepository_FindMapResponseByID_NoRows(t *testing.T) {
 }
 
 func TestMapRepository_FindMapResponseByID_QueryError(t *testing.T) {
-	repo, mock, cleanup := newMock(t)
+	r, mock, cleanup := newMock(t)
 	defer cleanup()
 
 	id := "map_123"
@@ -577,7 +591,7 @@ func TestMapRepository_FindMapResponseByID_QueryError(t *testing.T) {
 		WithArgs(id).
 		WillReturnError(assertErr("select failed"))
 
-	res, err := repo.FindMapResponseByID(context.Background(), id)
+	res, err := r.FindMapResponseByID(context.Background(), id)
 	if err == nil {
 		t.Fatalf("expected error, got nil; res=%#v", res)
 	}
@@ -587,7 +601,7 @@ func TestMapRepository_FindMapResponseByID_QueryError(t *testing.T) {
 }
 
 func TestMapRepository_FindMapResponseByID_NoChildren(t *testing.T) {
-	repo, mock, cleanup := newMock(t)
+	r, mock, cleanup := newMock(t)
 	defer cleanup()
 
 	id := "map_123"
@@ -631,7 +645,7 @@ func TestMapRepository_FindMapResponseByID_NoChildren(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows(childCols))
 
 	// Act
-	res, err := repo.FindMapResponseByID(context.Background(), id)
+	res, err := r.FindMapResponseByID(context.Background(), id)
 
 	// Assert
 	if err != nil {
@@ -651,9 +665,345 @@ func TestMapRepository_FindMapResponseByID_NoChildren(t *testing.T) {
 	}
 }
 
-// --- helpers ---
+// --- UpdatePartial (PATCH) ---
 
-// assertErr はテスト内で分かりやすい固定エラーを作る小道具
-type assertErr string
+func TestMapRepository_UpdatePartial_UpdateSomeFields_OK(t *testing.T) {
+	r, mock, cleanup := newMock(t)
+	defer cleanup()
 
-func (e assertErr) Error() string { return string(e) }
+	id := "map_123"
+	now := time.Now().UTC()
+
+	// 現在値（更新前）
+	mainCols := []string{
+		"id", "name", "image_data", "natural_width", "natural_height",
+		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
+	}
+	mainRow := sqlmock.NewRows(mainCols).AddRow(
+		id, "Old Name", "BASE64_OLD", 1024, 768,
+		nil, false, 0, now.Add(-time.Hour), now.Add(-time.Hour), nil,
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(id).
+		WillReturnRows(mainRow)
+
+	// 期待: name, natural_width, parent_map_id, has_floors, floor_count を更新 + modified_at
+	mock.ExpectExec(regexp.QuoteMeta(`
+		UPDATE maps SET name = ?, natural_width = ?, parent_map_id = ?, has_floors = ?, floor_count = ?, modified_at = ? WHERE id = ? AND deleted_at IS NULL
+	`)).
+		WithArgs("New Campus", 2048, "parent_1", true, 2, sqlmock.AnyArg(), id).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// 更新後の再取得（FindMapResponseByID）
+	afterRow := sqlmock.NewRows(mainCols).AddRow(
+		id, "New Campus", "BASE64_OLD", 2048, 768,
+		"parent_1", true, 2, now.Add(-time.Hour), now.Add(time.Minute), nil,
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(id).
+		WillReturnRows(afterRow)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*) FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL
+	`)).
+		WithArgs(id).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+
+	childCols := []string{"id", "name", "has_floors", "floor_count"}
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, has_floors, floor_count
+		  FROM maps
+		 WHERE parent_map_id = ? AND deleted_at IS NULL
+		 ORDER BY name
+	`)).
+		WithArgs(id).
+		WillReturnRows(sqlmock.NewRows(childCols))
+
+	// リクエスト
+	req := &repository.MapUpdateRequest{
+		Name:         repository.OptionalString{Set: true, Value: "New Campus"},
+		NaturalWidth: repository.OptionalInt{Set: true, Value: 2048},
+		// naturalHeight は未指定（据置）
+		ParentMapID: repository.OptionalString{Set: true, Value: "parent_1"},
+		HasFloors:   repository.OptionalBool{Set: true, Value: true},
+		FloorCount:  repository.OptionalInt{Set: true, Value: 2},
+	}
+
+	// Act
+	got, err := r.UpdatePartial(context.Background(), id, req)
+
+	// Assert
+	if err != nil {
+		t.Fatalf("UpdatePartial returned err: %v", err)
+	}
+	if got == nil || got.ID != id || got.Name != "New Campus" || got.NaturalWidth != 2048 || !got.HasFloors || got.FloorCount != 2 {
+		t.Fatalf("unexpected updated response: %+v", got)
+	}
+	if got.ParentMapID == nil || *got.ParentMapID != "parent_1" {
+		t.Fatalf("expected parent_map_id=parent_1, got: %+v", got.ParentMapID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestMapRepository_UpdatePartial_ClearParentToNULL_OK(t *testing.T) {
+	r, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	id := "map_456"
+	now := time.Now().UTC()
+
+	// 現在は親つき・階層あり
+	mainCols := []string{
+		"id", "name", "image_data", "natural_width", "natural_height",
+		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
+	}
+	mainRow := sqlmock.NewRows(mainCols).AddRow(
+		id, "Bldg", "BASE64", 3000, 2000,
+		"parent_old", true, 5, now.Add(-time.Hour), now.Add(-time.Hour), nil,
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(id).
+		WillReturnRows(mainRow)
+
+	// 期待: parent_map_id を NULL に、has_floors=false に伴い floor_count=0 へ正規化
+	mock.ExpectExec(regexp.QuoteMeta(`
+		UPDATE maps SET parent_map_id = NULL, has_floors = ?, floor_count = ?, modified_at = ? WHERE id = ? AND deleted_at IS NULL
+	`)).
+		WithArgs(false, 0, sqlmock.AnyArg(), id).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// 更新後の再取得
+	afterRow := sqlmock.NewRows(mainCols).AddRow(
+		id, "Bldg", "BASE64", 3000, 2000,
+		nil, false, 0, now.Add(-time.Hour), now.Add(time.Minute), nil,
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(id).
+		WillReturnRows(afterRow)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COUNT(*) FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL
+	`)).
+		WithArgs(id).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+
+	childCols := []string{"id", "name", "has_floors", "floor_count"}
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, has_floors, floor_count
+		  FROM maps
+		 WHERE parent_map_id = ? AND deleted_at IS NULL
+		 ORDER BY name
+	`)).
+		WithArgs(id).
+		WillReturnRows(sqlmock.NewRows(childCols))
+
+	req := &repository.MapUpdateRequest{
+		// JSONの null を想定：Value="" で NULL に解釈
+		ParentMapID: repository.OptionalString{Set: true, Value: ""},
+		HasFloors:   repository.OptionalBool{Set: true, Value: false},
+		// FloorCount 未指定でも false に正規化され 0 になる
+	}
+
+	got, err := r.UpdatePartial(context.Background(), id, req)
+	if err != nil {
+		t.Fatalf("UpdatePartial returned err: %v", err)
+	}
+	if got.ParentMapID != nil {
+		t.Fatalf("expected parent_map_id=NULL, got: %+v", got.ParentMapID)
+	}
+	if got.HasFloors || got.FloorCount != 0 {
+		t.Fatalf("expected hasFloors=false & floorCount=0; got hasFloors=%v floorCount=%d", got.HasFloors, got.FloorCount)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestMapRepository_UpdatePartial_NoChange_NoUpdate(t *testing.T) {
+	r, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	id := "map_same"
+	now := time.Now().UTC()
+
+	// 現在値
+	mainCols := []string{
+		"id", "name", "image_data", "natural_width", "natural_height",
+		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
+	}
+	mainRow := sqlmock.NewRows(mainCols).AddRow(
+		id, "Same", "IMG", 1000, 800,
+		nil, false, 0, now.Add(-time.Hour), now.Add(-time.Hour), nil,
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(id).
+		WillReturnRows(mainRow)
+
+	// リクエストは全フィールド未指定（=変更なし）
+	req := &repository.MapUpdateRequest{}
+
+	// Act
+	got, err := r.UpdatePartial(context.Background(), id, req)
+
+	// Assert: UPDATE は発行されず、そのまま現在値を詰め替えて返る
+	if err != nil {
+		t.Fatalf("UpdatePartial returned err: %v", err)
+	}
+	if got == nil || got.ID != id || got.Name != "Same" || got.NaturalWidth != 1000 || got.NaturalHeight != 800 {
+		t.Fatalf("unexpected response for no-change patch: %+v", got)
+	}
+	// ここでは FindMapResponseByID を呼ばない実装なので、追加のクエリ期待は無し
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestMapRepository_UpdatePartial_NotFound(t *testing.T) {
+	r, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	id := "missing"
+
+	mainCols := []string{
+		"id", "name", "image_data", "natural_width", "natural_height",
+		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
+	}
+	// 0行 -> sql.ErrNoRows 想定で nil を返す
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(id).
+		WillReturnRows(sqlmock.NewRows(mainCols))
+
+	req := &repository.MapUpdateRequest{Name: repository.OptionalString{Set: true, Value: "X"}}
+
+	got, err := r.UpdatePartial(context.Background(), id, req)
+	if err == nil {
+		t.Fatalf("expected error, got nil; res=%#v", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestMapRepository_UpdatePartial_ValidationError_Floors(t *testing.T) {
+	r, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	id := "map_v"
+	now := time.Now().UTC()
+
+	// 現在値（has_floors=false, floor_count=0）
+	mainCols := []string{
+		"id", "name", "image_data", "natural_width", "natural_height",
+		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
+	}
+	mainRow := sqlmock.NewRows(mainCols).AddRow(
+		id, "X", "IMG", 100, 100, nil, false, 0, now.Add(-time.Hour), now.Add(-time.Hour), nil,
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(id).
+		WillReturnRows(mainRow)
+
+	// リクエスト: hasFloors=true だが floorCount=0 -> バリデーションエラー
+	req := &repository.MapUpdateRequest{
+		HasFloors:  repository.OptionalBool{Set: true, Value: true},
+		FloorCount: repository.OptionalInt{Set: true, Value: 0},
+	}
+
+	got, err := r.UpdatePartial(context.Background(), id, req)
+	if err == nil {
+		t.Fatalf("expected validation error, got nil; res=%#v", got)
+	}
+	// UPDATE は走らないのでここで終了
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestMapRepository_UpdatePartial_UpdateExecError(t *testing.T) {
+	r, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	id := "map_err"
+	now := time.Now().UTC()
+
+	// 現在値
+	mainCols := []string{
+		"id", "name", "image_data", "natural_width", "natural_height",
+		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
+	}
+	mainRow := sqlmock.NewRows(mainCols).AddRow(
+		id, "Old", "IMG", 100, 100, nil, false, 0, now.Add(-time.Hour), now.Add(-time.Hour), nil,
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE id = ? AND deleted_at IS NULL
+		 LIMIT 1
+	`)).
+		WithArgs(id).
+		WillReturnRows(mainRow)
+
+	// UPDATE でエラー
+	mock.ExpectExec(regexp.QuoteMeta(`
+		UPDATE maps SET name = ?, modified_at = ? WHERE id = ? AND deleted_at IS NULL
+	`)).
+		WithArgs("New", sqlmock.AnyArg(), id).
+		WillReturnError(assertErr("update failed"))
+
+	req := &repository.MapUpdateRequest{
+		Name: repository.OptionalString{Set: true, Value: "New"},
+	}
+
+	got, err := r.UpdatePartial(context.Background(), id, req)
+	if err == nil {
+		t.Fatalf("expected exec error, got nil; res=%#v", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}

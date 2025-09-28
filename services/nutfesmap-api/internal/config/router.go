@@ -101,6 +101,7 @@ func SetupRouter(cfg *Config) *echo.Echo {
 	mapsG.POST("", mapH.Create)
 	mapsG.GET("/index", mapH.Index)
 	mapsG.GET("/:mapId", mapH.Show)
+	mapsG.PATCH("/:mapId", mapH.Update)
 
 	// /users 認証必須
 	jwtCfg := echojwt.Config{

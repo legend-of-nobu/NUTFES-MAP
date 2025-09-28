@@ -231,3 +231,46 @@ func (h *MapHandler) Show(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, res)
 }
+
+func (h *MapHandler) Update(c echo.Context) error {
+	mapID := strings.TrimSpace(c.Param("mapId"))
+	if mapID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "mapId is required")
+	}
+
+	// 部分更新の受け口（すべて任意項目）
+	var req repository.MapUpdateRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid JSON body")
+	}
+	// Create と違い、バリデーションは基本的にリポジトリ側で実施
+
+	ctx := c.Request().Context()
+	updated, err := h.Repo.UpdatePartial(ctx, mapID, &req)
+	if err != nil {
+		// NotFound（対象が存在しない or 競合で削除された）
+		if err.Error() == "sql: no rows in result set" {
+			return echo.NewHTTPError(http.StatusNotFound, "map not found")
+		}
+		// リポジトリでのドメイン検証エラー（fmt.Errorf 等）は400に寄せる
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	if updated == nil {
+		// 念のため
+		return echo.NewHTTPError(http.StatusNotFound, "map not found")
+	}
+
+	// 子は名前昇順で安定化（FindMapResponseByID と同様の整形）
+	sort.Slice(updated.Children, func(i, j int) bool {
+		return updated.Children[i].Name < updated.Children[j].Name
+	})
+
+	// ETag: ID + ModifiedAt
+	hash := sha256.New()
+	hash.Write([]byte(updated.ID))
+	hash.Write([]byte(updated.ModifiedAt.UTC().Format(time.RFC3339Nano)))
+	etag := `W/"` + hex.EncodeToString(hash.Sum(nil)) + `"`
+	c.Response().Header().Set("ETag", etag)
+
+	return c.JSON(http.StatusOK, updated)
+}
