@@ -1,7 +1,10 @@
 package handlers
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -43,6 +46,11 @@ type MapResponse struct {
 	Children      []MapChildRefDTO `json:"children"`
 	CreatedAt     time.Time        `json:"createdAt"`
 	ModifiedAt    time.Time        `json:"modifiedAt"`
+}
+
+// レスポンス全体ラッパ
+type MapsIndexResponse struct {
+	Items []MapResponse `json:"items"`
 }
 
 type MapHandler struct {
@@ -135,4 +143,60 @@ func (h *MapHandler) Create(c echo.Context) error {
 		Children:      []MapChildRefDTO{},
 	}
 	return c.JSON(http.StatusCreated, fallback)
+}
+
+// GET /maps/index
+func (h *MapHandler) Index(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	ags, err := h.Repo.FindIndexAggregates(ctx)
+	if err != nil {
+		return err
+	}
+
+	// 並びの安定化（子は名前昇順、親は作成日降順はリポジトリ側SQLで担保）
+	items := make([]MapResponse, 0, len(ags))
+	hash := sha256.New()
+
+	for _, ag := range ags {
+		// 念のため子を Name 昇順に
+		sort.Slice(ag.Children, func(i, j int) bool {
+			return ag.Children[i].Name < ag.Children[j].Name
+		})
+
+		children := make([]MapChildRefDTO, 0, len(ag.Children))
+		for _, ch := range ag.Children {
+			children = append(children, MapChildRefDTO{
+				ID:         ch.ID,
+				Name:       ch.Name,
+				HasFloors:  ch.HasFloors,
+				FloorCount: ch.FloorCount,
+			})
+		}
+
+		base := ag.Base
+		items = append(items, MapResponse{
+			ID:            base.ID,
+			Name:          base.Name,
+			ImageData:     base.ImageData,
+			NaturalWidth:  base.NaturalWidth,
+			NaturalHeight: base.NaturalHeight,
+			ParentMapID:   base.ParentMapID,
+			HasFloors:     base.HasFloors,
+			FloorCount:    base.FloorCount,
+			ChildrenCount: ag.ChildrenCount,
+			Children:      children,
+			CreatedAt:     base.CreatedAt,
+			ModifiedAt:    base.ModifiedAt,
+		})
+
+		// ETag 材料（ID+ModifiedAt）
+		hash.Write([]byte(base.ID))
+		hash.Write([]byte(base.ModifiedAt.UTC().Format(time.RFC3339Nano)))
+	}
+
+	etag := `W/"` + hex.EncodeToString(hash.Sum(nil)) + `"`
+	c.Response().Header().Set("ETag", etag)
+
+	return c.JSON(http.StatusOK, MapsIndexResponse{Items: items})
 }

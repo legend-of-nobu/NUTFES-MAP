@@ -220,6 +220,236 @@ func TestMapRepository_FindAggregate_QueryError(t *testing.T) {
 	}
 }
 
+func TestMapRepository_FindIndexAggregates_OK(t *testing.T) {
+	repo, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+
+	// 1) 親一覧（2件）
+	parentCols := []string{
+		"id", "name", "image_data", "natural_width", "natural_height",
+		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
+	}
+	parentRows := sqlmock.NewRows(parentCols).
+		AddRow("p1", "Campus A", "BASE64A", 4096, 3072, nil, true, 3, now, now, nil).
+		AddRow("p2", "Campus B", "BASE64B", 2048, 1536, nil, false, 0, now, now, nil)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE parent_map_id IS NULL
+		   AND deleted_at IS NULL
+		 ORDER BY created_at DESC
+	`)).
+		WillReturnRows(parentRows)
+
+	// 2) 子件数（親ごとに集約）
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT parent_map_id, COUNT(*)
+		  FROM maps
+		 WHERE deleted_at IS NULL
+		   AND parent_map_id IN (?,?)
+		 GROUP BY parent_map_id
+	`)).
+		WithArgs("p1", "p2").
+		WillReturnRows(
+			sqlmock.NewRows([]string{"parent_map_id", "count"}).
+				AddRow("p1", 2).
+				AddRow("p2", 1),
+		)
+
+	// 3) 子の軽量一覧（親ID IN で一括）
+	childCols := []string{"id", "name", "has_floors", "floor_count", "parent_map_id"}
+	childRows := sqlmock.NewRows(childCols).
+		AddRow("c11", "1F", false, 0, "p1").
+		AddRow("c12", "2F", false, 0, "p1").
+		AddRow("c21", "展示エリア", false, 0, "p2")
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, has_floors, floor_count, parent_map_id
+		  FROM maps
+		 WHERE deleted_at IS NULL
+		   AND parent_map_id IN (?,?)
+		 ORDER BY name ASC
+	`)).
+		WithArgs("p1", "p2").
+		WillReturnRows(childRows)
+
+	// Act
+	ags, err := repo.FindIndexAggregates(context.Background())
+
+	// Assert
+	if err != nil {
+		t.Fatalf("FindIndexAggregates returned err: %v", err)
+	}
+	if len(ags) != 2 {
+		t.Fatalf("want 2 parents, got %d", len(ags))
+	}
+
+	// p1
+	if ags[0].Base.ID != "p1" || ags[0].ChildrenCount != 2 || len(ags[0].Children) != 2 {
+		t.Fatalf("unexpected aggregate for p1: %+v", ags[0])
+	}
+	// p2
+	if ags[1].Base.ID != "p2" || ags[1].ChildrenCount != 1 || len(ags[1].Children) != 1 {
+		t.Fatalf("unexpected aggregate for p2: %+v", ags[1])
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestMapRepository_FindIndexAggregates_NoParents(t *testing.T) {
+	repo, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	parentCols := []string{
+		"id", "name", "image_data", "natural_width", "natural_height",
+		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
+	}
+	// 親0件
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE parent_map_id IS NULL
+		   AND deleted_at IS NULL
+		 ORDER BY created_at DESC
+	`)).WillReturnRows(sqlmock.NewRows(parentCols))
+
+	ags, err := repo.FindIndexAggregates(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(ags) != 0 {
+		t.Fatalf("want 0 parents, got %d", len(ags))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestMapRepository_FindIndexAggregates_ParentQueryError(t *testing.T) {
+	repo, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE parent_map_id IS NULL
+		   AND deleted_at IS NULL
+		 ORDER BY created_at DESC
+	`)).WillReturnError(assertErr("parent select failed"))
+
+	ags, err := repo.FindIndexAggregates(context.Background())
+	if err == nil {
+		t.Fatalf("expected error, got nil; ags=%#v", ags)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestMapRepository_FindIndexAggregates_CountQueryError(t *testing.T) {
+	repo, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	parentCols := []string{
+		"id", "name", "image_data", "natural_width", "natural_height",
+		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
+	}
+	parentRows := sqlmock.NewRows(parentCols).
+		AddRow("p1", "Campus A", "BASE64A", 4096, 3072, nil, true, 3, now, now, nil).
+		AddRow("p2", "Campus B", "BASE64B", 2048, 1536, nil, false, 0, now, now, nil)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE parent_map_id IS NULL
+		   AND deleted_at IS NULL
+		 ORDER BY created_at DESC
+	`)).WillReturnRows(parentRows)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT parent_map_id, COUNT(*)
+		  FROM maps
+		 WHERE deleted_at IS NULL
+		   AND parent_map_id IN (?,?)
+		 GROUP BY parent_map_id
+	`)).
+		WithArgs("p1", "p2").
+		WillReturnError(assertErr("count select failed"))
+
+	ags, err := repo.FindIndexAggregates(context.Background())
+	if err == nil {
+		t.Fatalf("expected error, got nil; ags=%#v", ags)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestMapRepository_FindIndexAggregates_ChildQueryError(t *testing.T) {
+	repo, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	parentCols := []string{
+		"id", "name", "image_data", "natural_width", "natural_height",
+		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
+	}
+	parentRows := sqlmock.NewRows(parentCols).
+		AddRow("p1", "Campus A", "BASE64A", 4096, 3072, nil, true, 3, now, now, nil).
+		AddRow("p2", "Campus B", "BASE64B", 2048, 1536, nil, false, 0, now, now, nil)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE parent_map_id IS NULL
+		   AND deleted_at IS NULL
+		 ORDER BY created_at DESC
+	`)).WillReturnRows(parentRows)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT parent_map_id, COUNT(*)
+		  FROM maps
+		 WHERE deleted_at IS NULL
+		   AND parent_map_id IN (?,?)
+		 GROUP BY parent_map_id
+	`)).
+		WithArgs("p1", "p2").
+		WillReturnRows(
+			sqlmock.NewRows([]string{"parent_map_id", "count"}).
+				AddRow("p1", 2).
+				AddRow("p2", 1),
+		)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, has_floors, floor_count, parent_map_id
+		  FROM maps
+		 WHERE deleted_at IS NULL
+		   AND parent_map_id IN (?,?)
+		 ORDER BY name ASC
+	`)).
+		WithArgs("p1", "p2").
+		WillReturnError(assertErr("children select failed"))
+
+	ags, err := repo.FindIndexAggregates(context.Background())
+	if err == nil {
+		t.Fatalf("expected error, got nil; ags=%#v", ags)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 // --- helpers ---
 
 // assertErr はテスト内で分かりやすい固定エラーを作る小道具

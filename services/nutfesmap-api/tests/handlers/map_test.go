@@ -37,6 +37,7 @@ func setupEchoWithMock(t *testing.T) (*echo.Echo, sqlmock.Sqlmock, func()) {
 
 	// ルーティング（本番と同じパス）
 	e.POST("/maps", mapH.Create)
+	e.GET("/maps/index", mapH.Index)
 
 	cleanup := func() {
 		_ = db.Close()
@@ -205,6 +206,130 @@ func TestMapHandler_Create_InsertError(t *testing.T) {
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
 
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestMapHandler_Index_OK(t *testing.T) {
+	e, mock, cleanup := setupEchoWithMock(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+
+	// 1) 親一覧（2件）
+	parentCols := []string{
+		"id", "name", "image_data", "natural_width", "natural_height",
+		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
+	}
+	// created_at DESC を想定して p1 → p2 の順で返す
+	parentRows := sqlmock.NewRows(parentCols).
+		AddRow("p1", "Campus A", "BASE64A", 4096, 3072, nil, true, 3, now, now, nil).
+		AddRow("p2", "Campus B", "BASE64B", 2048, 1536, nil, false, 0, now.Add(-time.Minute), now.Add(-time.Minute), nil)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE parent_map_id IS NULL
+		   AND deleted_at IS NULL
+		 ORDER BY created_at DESC
+	`)).WillReturnRows(parentRows)
+
+	// 2) 子件数の集約（IN (?,?)）
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT parent_map_id, COUNT(*)
+		  FROM maps
+		 WHERE deleted_at IS NULL
+		   AND parent_map_id IN (?,?)
+		 GROUP BY parent_map_id
+	`)).
+		WithArgs("p1", "p2").
+		WillReturnRows(
+			sqlmock.NewRows([]string{"parent_map_id", "count"}).
+				AddRow("p1", 2).
+				AddRow("p2", 1),
+		)
+
+	// 3) 子の軽量一覧（IN (?,?)、名前昇順）
+	childCols := []string{"id", "name", "has_floors", "floor_count", "parent_map_id"}
+	childRows := sqlmock.NewRows(childCols).
+		AddRow("c11", "1F", false, 0, "p1").
+		AddRow("c12", "2F", false, 0, "p1").
+		AddRow("c21", "展示エリア", false, 0, "p2")
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, has_floors, floor_count, parent_map_id
+		  FROM maps
+		 WHERE deleted_at IS NULL
+		   AND parent_map_id IN (?,?)
+		 ORDER BY name ASC
+	`)).
+		WithArgs("p1", "p2").
+		WillReturnRows(childRows)
+
+	// --- 実行 ---
+	req := httptest.NewRequest(http.MethodGet, "/maps/index", nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	// --- 検証 ---
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if etag := rec.Header().Get("ETag"); etag == "" {
+		t.Fatalf("ETag header must be set")
+	}
+
+	// レスポンスの最小検証
+	var list struct {
+		Items []handlers.MapResponse `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("json unmarshal error: %v, body=%s", err, rec.Body.String())
+	}
+	if len(list.Items) != 2 {
+		t.Fatalf("want 2 items, got %d", len(list.Items))
+	}
+	// p1
+	if list.Items[0].ID != "p1" || list.Items[0].ChildrenCount != 2 || len(list.Items[0].Children) != 2 {
+		t.Fatalf("unexpected p1 aggregate: %+v", list.Items[0])
+	}
+	// 子は名前昇順（"1F","2F"）
+	if list.Items[0].Children[0].Name != "1F" || list.Items[0].Children[1].Name != "2F" {
+		t.Fatalf("children not sorted by name asc: %+v", list.Items[0].Children)
+	}
+	// p2
+	if list.Items[1].ID != "p2" || list.Items[1].ChildrenCount != 1 || len(list.Items[1].Children) != 1 {
+		t.Fatalf("unexpected p2 aggregate: %+v", list.Items[1])
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestMapHandler_Index_SQL_Error(t *testing.T) {
+	e, mock, cleanup := setupEchoWithMock(t)
+	defer cleanup()
+
+	// 親の最初のSELECTでエラーを返す
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, name, image_data, natural_width, natural_height,
+		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
+		  FROM maps
+		 WHERE parent_map_id IS NULL
+		   AND deleted_at IS NULL
+		 ORDER BY created_at DESC
+	`)).WillReturnError(assertErr("parent select failed"))
+
+	req := httptest.NewRequest(http.MethodGet, "/maps/index", nil)
+	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusInternalServerError {
