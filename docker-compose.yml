@@ -1,18 +1,4 @@
-version: '3.8'
-
 services:
-  nutfesmap-api:
-    build:
-      context: .
-      dockerfile: services/nutfesmap-api/build/Dockerfile
-    container_name: nutfesmap-api
-    env_file: services/nutfesmap-api/config/.env
-    ports:
-      - "8080:8080"
-    depends_on:
-      nutfesmap-database:
-        condition: service_healthy
-
   nutfesmap-database:
     image: mysql:8.0
     container_name: nutfesmap-database
@@ -27,7 +13,34 @@ services:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$MYSQL_ROOT_PASSWORD"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+
+  nutfesmap-migrate:
+    image: migrate/migrate:v4.17.0
+    container_name: nutfesmap-migrate
+    depends_on:
+      nutfesmap-database:
+        condition: service_healthy
+    env_file: services/nutfesmap-api/config/.env
+    volumes:
+      - ./services/nutfesmap-api/migrations:/migrations:ro
+      - ./services/nutfesmap-api/scripts/migrate.sh:/scripts/migrate.sh:ro
+    entrypoint: ["/bin/sh","-c","/scripts/migrate.sh"]
+    restart: "no"
+
+  nutfesmap-api:
+    build:
+      context: .
+      dockerfile: services/nutfesmap-api/build/Dockerfile
+    container_name: nutfesmap-api
+    env_file: services/nutfesmap-api/config/.env
+    ports:
+      - "8080:8080"
+    depends_on:
+      nutfesmap-database:
+        condition: service_healthy
+      nutfesmap-migrate:
+        condition: service_completed_successfully
 
   nutfesmap-api-document:
     image: swaggerapi/swagger-ui:latest
