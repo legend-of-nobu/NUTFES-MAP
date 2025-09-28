@@ -436,36 +436,6 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/ServerError" }
 
-  /pins/{pinId}/waittime:
-    patch:
-      tags: ["Pins"]
-      summary: "待ち時間の更新（担当者用）"
-      description: |
-        待ち時間（分）を更新する。負値は不可。0 は待ち時間なし。
-        更新は差分配信の対象となる。
-      parameters:
-        - in: "path"
-          name: "pinId"
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/WaittimeUpdateRequest"
-      responses:
-        "200":
-          description: "更新成功"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PinResponse"
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "500": { $ref: "#/components/responses/ServerError" }
-
 components:
   securitySchemes:
     AccessToken:
