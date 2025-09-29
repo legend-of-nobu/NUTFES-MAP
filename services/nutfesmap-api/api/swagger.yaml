@@ -642,35 +642,9 @@ components:
 
     MapCreateRequest:
       type: object
-      required:
-        - name
-        - imageData
-        - naturalWidth
-        - naturalHeight
       properties:
-        name:
-          type: string
-        imageData:
-          type: string
-          format: byte
-          description: "背景画像のbase64エンコード文字列"
-        naturalWidth:
-          type: integer
-          minimum: 1
-        naturalHeight:
-          type: integer
-          minimum: 1
         parentMapId:
           type: string
-          nullable: true
-        hasFloors:
-          type: boolean
-          default: false
-        floorCount:
-          type: integer
-          minimum: 0
-          default: 0
-          description: "hasFloors=true の場合は 1 以上を推奨"
 
     MapUpdateRequest:
       type: object
@@ -687,14 +661,6 @@ components:
         naturalHeight:
           type: integer
           minimum: 1
-        parentMapId:
-          type: string
-          nullable: true
-        hasFloors:
-          type: boolean
-        floorCount:
-          type: integer
-          minimum: 0
 
     # --- Pin関連（説明画像のbase64を追加） ---
     PinType:

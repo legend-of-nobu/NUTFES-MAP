@@ -2,30 +2,21 @@ package handlers
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
-	"nutfesmap/internal/model"
 	"nutfesmap/internal/repository"
 )
 
-type MapCreateRequest struct {
-	Name          string  `json:"name"          validate:"required,min=1"`
-	ImageData     string  `json:"imageData"     validate:"required"` // base64
-	NaturalWidth  int     `json:"naturalWidth"  validate:"required,min=1"`
-	NaturalHeight int     `json:"naturalHeight" validate:"required,min=1"`
-	ParentMapID   *string `json:"parentMapId"`
-	HasFloors     bool    `json:"hasFloors"`
-	FloorCount    int     `json:"floorCount"    validate:"min=0"`
-}
+// ---- Request / Response DTO ----
 
-// Response DTO（外部契約）
 type MapChildRefDTO struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
@@ -48,6 +39,11 @@ type MapResponse struct {
 	ModifiedAt    time.Time        `json:"modifiedAt"`
 }
 
+// POST /maps（空マップ作成）リクエスト
+type MapCreateRequest struct {
+	ParentMapID *string `json:"parentMapId"`
+}
+
 // レスポンス全体ラッパ
 type MapsIndexResponse struct {
 	Items []MapResponse `json:"items"`
@@ -62,46 +58,29 @@ func NewMapHandler(r *repository.MapRepository) *MapHandler {
 }
 
 // POST /maps
+// 空のマップのみ作成。name / imageData / natural* / floors は受け付けない。
 func (h *MapHandler) Create(c echo.Context) error {
 	var req MapCreateRequest
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
 	}
-	if err := c.Validate(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
-	}
-
-	// 追加の軽い検証（ドメイン制約）
-	if strings.TrimSpace(req.ImageData) == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "imageData is required")
-	}
-	if req.HasFloors && req.FloorCount < 1 {
-		return echo.NewHTTPError(http.StatusBadRequest, "floorCount must be >= 1 when hasFloors=true")
-	}
 
 	newID := uuid.NewString()
-	m := &model.Map{
-		ID:            newID,
-		Name:          req.Name,
-		ImageData:     req.ImageData,
-		NaturalWidth:  req.NaturalWidth,
-		NaturalHeight: req.NaturalHeight,
-		ParentMapID:   req.ParentMapID,
-		HasFloors:     req.HasFloors,
-		FloorCount:    req.FloorCount,
-	}
-
 	ctx := c.Request().Context()
-	if err := h.Repo.Insert(ctx, m); err != nil {
+
+	// 空マップを作成（name/image/natural_* は未設定、親のみ任意）
+	if err := h.Repo.CreateEmpty(ctx, newID, req.ParentMapID); err != nil {
+		// DB起因の失敗はそのまま Echo が 500 にマップ
 		return err
 	}
 
+	// 作成直後の状態を再取得
 	agg, err := h.Repo.FindAggregate(ctx, newID)
 	if err != nil {
 		return err
 	}
 
-	// 正常系：Aggregate からレスポンスDTOを組み立て
+	// 正常系: Aggregate からレスポンス構築
 	if agg != nil && agg.Base != nil {
 		children := make([]MapChildRefDTO, 0, len(agg.Children))
 		for _, ch := range agg.Children {
@@ -115,7 +94,7 @@ func (h *MapHandler) Create(c echo.Context) error {
 		res := MapResponse{
 			ID:            agg.Base.ID,
 			Name:          agg.Base.Name,
-			ImageData:     agg.Base.ImageData,
+			ImageData:     agg.Base.ImageData, // LONGTEXT(base64) をそのまま返す
 			NaturalWidth:  agg.Base.NaturalWidth,
 			NaturalHeight: agg.Base.NaturalHeight,
 			ParentMapID:   agg.Base.ParentMapID,
@@ -126,22 +105,41 @@ func (h *MapHandler) Create(c echo.Context) error {
 			CreatedAt:     agg.Base.CreatedAt,
 			ModifiedAt:    agg.Base.ModifiedAt,
 		}
+
+		// ETag: ID + ModifiedAt
+		hash := sha256.New()
+		hash.Write([]byte(res.ID))
+		hash.Write([]byte(res.ModifiedAt.UTC().Format(time.RFC3339Nano)))
+		etag := `W/"` + hex.EncodeToString(hash.Sum(nil)) + `"`
+		c.Response().Header().Set("ETag", etag)
+
 		return c.JSON(http.StatusCreated, res)
 	}
 
 	// まれに直後の再読込に失敗した場合のフォールバック
+	now := time.Now().UTC()
 	fallback := MapResponse{
-		ID:            m.ID,
-		Name:          m.Name,
-		ImageData:     m.ImageData,
-		NaturalWidth:  m.NaturalWidth,
-		NaturalHeight: m.NaturalHeight,
-		ParentMapID:   m.ParentMapID,
-		HasFloors:     m.HasFloors,
-		FloorCount:    m.FloorCount,
+		ID:            newID,
+		Name:          "",
+		ImageData:     "",
+		NaturalWidth:  0,
+		NaturalHeight: 0,
+		ParentMapID:   req.ParentMapID,
+		HasFloors:     false,
+		FloorCount:    0,
 		ChildrenCount: 0,
 		Children:      []MapChildRefDTO{},
+		CreatedAt:     now,
+		ModifiedAt:    now,
 	}
+
+	// フォールバックでも ETag を必ず付与
+	hash := sha256.New()
+	hash.Write([]byte(fallback.ID))
+	hash.Write([]byte(fallback.ModifiedAt.UTC().Format(time.RFC3339Nano)))
+	etag := `W/"` + hex.EncodeToString(hash.Sum(nil)) + `"`
+	c.Response().Header().Set("ETag", etag)
+
 	return c.JSON(http.StatusCreated, fallback)
 }
 
@@ -154,7 +152,6 @@ func (h *MapHandler) Index(c echo.Context) error {
 		return err
 	}
 
-	// 並びの安定化（子は名前昇順、親は作成日降順はリポジトリ側SQLで担保）
 	items := make([]MapResponse, 0, len(ags))
 	hash := sha256.New()
 
@@ -178,7 +175,7 @@ func (h *MapHandler) Index(c echo.Context) error {
 		items = append(items, MapResponse{
 			ID:            base.ID,
 			Name:          base.Name,
-			ImageData:     base.ImageData,
+			ImageData:     base.ImageData, // LONGTEXT(base64)
 			NaturalWidth:  base.NaturalWidth,
 			NaturalHeight: base.NaturalHeight,
 			ParentMapID:   base.ParentMapID,
@@ -232,35 +229,33 @@ func (h *MapHandler) Show(c echo.Context) error {
 	return c.JSON(http.StatusOK, res)
 }
 
+// PATCH /maps/:mapId
 func (h *MapHandler) Update(c echo.Context) error {
 	mapID := c.Param("mapId")
 	if mapID == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "mapId is required")
 	}
 
-	// 部分更新の受け口（すべて任意項目）
+	// 受け取り: name / imageData / naturalWidth / naturalHeight / parentMapId のみ
 	var req repository.MapUpdateRequest
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid JSON body")
 	}
-	// Create と違い、バリデーションは基本的にリポジトリ側で実施
 
 	ctx := c.Request().Context()
 	updated, err := h.Repo.UpdatePartial(ctx, mapID, &req)
 	if err != nil {
-		// NotFound（対象が存在しない or 競合で削除された）
-		if err.Error() == "sql: no rows in result set" {
+		if errors.Is(err, sql.ErrNoRows) {
 			return echo.NewHTTPError(http.StatusNotFound, "map not found")
 		}
-		// リポジトリでのドメイン検証エラー（fmt.Errorf 等）は400に寄せる
+		// ドメイン検証エラーなどは 400 に寄せる（UpdatePartial は検証時に error を返す）
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	if updated == nil {
-		// 念のため
 		return echo.NewHTTPError(http.StatusNotFound, "map not found")
 	}
 
-	// 子は名前昇順で安定化（FindMapResponseByID と同様の整形）
+	// 子は名前昇順で安定化
 	sort.Slice(updated.Children, func(i, j int) bool {
 		return updated.Children[i].Name < updated.Children[j].Name
 	})
@@ -286,7 +281,7 @@ func (h *MapHandler) Delete(c echo.Context) error {
 	_, _, err := h.Repo.DeleteCascade(ctx, mapID)
 	if err != nil {
 		// 対象なし
-		if err.Error() == "sql: no rows in result set" {
+		if errors.Is(err, sql.ErrNoRows) {
 			return echo.NewHTTPError(http.StatusNotFound, "map not found")
 		}
 		// それ以外は内部エラーとして扱う（Echo 側で 500 にマップ）

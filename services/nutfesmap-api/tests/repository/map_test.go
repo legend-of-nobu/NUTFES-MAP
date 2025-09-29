@@ -3,6 +3,7 @@ package repository_test
 import (
 	"context"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +15,6 @@ import (
 
 // --- helpers ---
 
-// newMock は MapRepository と sqlmock をまとめて返す
 func newMock(t *testing.T) (*repository.MapRepository, sqlmock.Sqlmock, func()) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -25,46 +25,115 @@ func newMock(t *testing.T) (*repository.MapRepository, sqlmock.Sqlmock, func()) 
 	return r, mock, cleanup
 }
 
-// assertErr はテスト内で分かりやすい固定エラーを作る小道具
 type assertErr string
 
 func (e assertErr) Error() string { return string(e) }
 
-// --- Insert ---
+// 改行/複数空白を \s+ に畳み、正規表現として安全にマッチできるようにする
+func rx(s string) string {
+	s = strings.TrimSpace(s)
+	s = regexp.QuoteMeta(s)
+	// 改行/タブ/スペースの差異を吸収
+	s = strings.ReplaceAll(s, "\\\n", "\\s+")
+	s = strings.ReplaceAll(s, "\\t", "\\s+")
+	s = strings.ReplaceAll(s, "\\  ", "\\s+")
+	s = strings.ReplaceAll(s, "\\ ", "\\s+")
+	return s
+}
 
-func TestMapRepository_Insert_OK(t *testing.T) {
+// -----------------------------------------------------------------------------
+// CreateEmpty（空マップ作成：ゼロ値を明示挿入） LONGTEXT対応
+// -----------------------------------------------------------------------------
+
+func TestMapRepository_CreateEmpty_NoParent_OK(t *testing.T) {
 	r, mock, cleanup := newMock(t)
 	defer cleanup()
 
-	// Arrange
-	m := &model.Map{
-		ID:            "map_123",
-		Name:          "Campus 2025",
-		ImageData:     "iVBORw0K...",
-		NaturalWidth:  4096,
-		NaturalHeight: 3072,
-		ParentMapID:   nil,
-		HasFloors:     true,
-		FloorCount:    3,
-	}
+	id := "map_empty_1"
 
-	// Execの引数のうち created_at / modified_at は time.Now().UTC() なので AnyArg() で受ける
-	mock.ExpectExec(regexp.QuoteMeta(`
+	mock.ExpectExec(rx(`
 		INSERT INTO maps (
-			id, name, image_data, natural_width, natural_height,
-			parent_map_id, has_floors, floor_count, created_at, modified_at
-		) VALUES (?,?,?,?,?,?,?,?,?,?)
+			id, name, image_data, natural_width, natural_height, parent_map_id, created_at, modified_at
+		) VALUES (?,?,?,?,?,?,?,?)
 	`)).
-		WithArgs(
-			m.ID, m.Name, m.ImageData, m.NaturalWidth, m.NaturalHeight,
-			m.ParentMapID, m.HasFloors, m.FloorCount, sqlmock.AnyArg(), sqlmock.AnyArg(),
-		).
+		WithArgs(id, "", nil, 0, 0, nil, sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	// Act
-	err := r.Insert(context.Background(), m)
+	if err := r.CreateEmpty(context.Background(), id, nil); err != nil {
+		t.Fatalf("CreateEmpty returned err: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
 
-	// Assert
+func TestMapRepository_CreateEmpty_WithParent_OK(t *testing.T) {
+	r, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	id := "map_empty_2"
+	parent := "parent_1"
+
+	mock.ExpectExec(rx(`
+		INSERT INTO maps (
+			id, name, image_data, natural_width, natural_height, parent_map_id, created_at, modified_at
+		) VALUES (?,?,?,?,?,?,?,?)
+	`)).
+		WithArgs(id, "", nil, 0, 0, parent, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := r.CreateEmpty(context.Background(), id, &parent); err != nil {
+		t.Fatalf("CreateEmpty returned err: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestMapRepository_CreateEmpty_ExecError(t *testing.T) {
+	r, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	id := "map_empty_err"
+
+	mock.ExpectExec(rx(`
+		INSERT INTO maps (
+			id, name, image_data, natural_width, natural_height, parent_map_id, created_at, modified_at
+		) VALUES (?,?,?,?,?,?,?,?)
+	`)).
+		WithArgs(id, "", nil, 0, 0, nil, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnError(assertErr("insert failed"))
+
+	if err := r.CreateEmpty(context.Background(), id, nil); err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Insert（現在は CreateEmpty と同じゼロ値明示挿入に合わせる） LONGTEXT対応
+// -----------------------------------------------------------------------------
+
+func TestMapRepository_Insert_Minimal_OK(t *testing.T) {
+	r, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	m := &model.Map{
+		ID:          "map_min_1",
+		ParentMapID: nil,
+	}
+
+	mock.ExpectExec(rx(`
+		INSERT INTO maps (
+			id, name, image_data, natural_width, natural_height, parent_map_id, created_at, modified_at
+		) VALUES (?,?,?,?,?,?,?,?)
+	`)).
+		WithArgs(m.ID, "", nil, 0, 0, nil, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := r.Insert(context.Background(), m)
 	if err != nil {
 		t.Fatalf("Insert returned err: %v", err)
 	}
@@ -73,30 +142,22 @@ func TestMapRepository_Insert_OK(t *testing.T) {
 	}
 }
 
-func TestMapRepository_Insert_ExecError(t *testing.T) {
+func TestMapRepository_Insert_Minimal_WithParent_ExecError(t *testing.T) {
 	r, mock, cleanup := newMock(t)
 	defer cleanup()
 
+	parent := "parent_x"
 	m := &model.Map{
-		ID:            "map_123",
-		Name:          "Campus 2025",
-		ImageData:     "iVBORw0K...",
-		NaturalWidth:  4096,
-		NaturalHeight: 3072,
-		HasFloors:     false,
-		FloorCount:    0,
+		ID:          "map_min_err",
+		ParentMapID: &parent,
 	}
 
-	mock.ExpectExec(regexp.QuoteMeta(`
+	mock.ExpectExec(rx(`
 		INSERT INTO maps (
-			id, name, image_data, natural_width, natural_height,
-			parent_map_id, has_floors, floor_count, created_at, modified_at
-		) VALUES (?,?,?,?,?,?,?,?,?,?)
+			id, name, image_data, natural_width, natural_height, parent_map_id, created_at, modified_at
+		) VALUES (?,?,?,?,?,?,?,?)
 	`)).
-		WithArgs(
-			m.ID, m.Name, m.ImageData, m.NaturalWidth, m.NaturalHeight,
-			m.ParentMapID, m.HasFloors, m.FloorCount, sqlmock.AnyArg(), sqlmock.AnyArg(),
-		).
+		WithArgs(m.ID, "", nil, 0, 0, parent, sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnError(assertErr("insert failed"))
 
 	err := r.Insert(context.Background(), m)
@@ -108,58 +169,92 @@ func TestMapRepository_Insert_ExecError(t *testing.T) {
 	}
 }
 
-// --- FindAggregate ---
+// -----------------------------------------------------------------------------
+// SQL 断片（実装に合わせて COALESCE(image_data,'') を使用）
+// -----------------------------------------------------------------------------
+
+const selectOneSQL = `
+SELECT
+  id,
+  COALESCE(name, ''),
+  COALESCE(image_data, ''),
+  COALESCE(natural_width, 0),
+  COALESCE(natural_height, 0),
+  parent_map_id,
+  has_floors,
+  floor_count,
+  created_at,
+  modified_at,
+  deleted_at
+FROM maps
+WHERE id = ? AND deleted_at IS NULL
+LIMIT 1
+`
+
+const selectParentsSQL = `
+SELECT
+  id,
+  COALESCE(name, ''),
+  COALESCE(image_data, ''),
+  COALESCE(natural_width, 0),
+  COALESCE(natural_height, 0),
+  parent_map_id,
+  has_floors,
+  floor_count,
+  created_at,
+  modified_at,
+  deleted_at
+FROM maps
+WHERE parent_map_id IS NULL
+  AND deleted_at IS NULL
+ORDER BY created_at DESC
+`
+
+// -----------------------------------------------------------------------------
+// FindAggregate
+// -----------------------------------------------------------------------------
 
 func TestMapRepository_FindAggregate_OK(t *testing.T) {
 	r, mock, cleanup := newMock(t)
 	defer cleanup()
 
 	id := "map_123"
-	// 1) 本体行
+	// 1) 本体行（image_data は LONGTEXT 文字列）
 	mainCols := []string{
 		"id", "name", "image_data", "natural_width", "natural_height",
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
 	}
 	now := time.Now().UTC()
 	mainRow := sqlmock.NewRows(mainCols).AddRow(
-		id, "Campus 2025", "iVBORw0K...", 4096, 3072,
+		id, "Campus 2025", "IMGPNG", 4096, 3072,
 		nil, true, 3, now, now, nil,
 	)
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, image_data, natural_width, natural_height,
-		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
-		  FROM maps
-		 WHERE id = ? AND deleted_at IS NULL
-		 LIMIT 1
-	`)).
+	mock.ExpectQuery(rx(selectOneSQL)).
 		WithArgs(id).
 		WillReturnRows(mainRow)
 
 	// 2) 子件数
-	mock.ExpectQuery(regexp.QuoteMeta(`
+	mock.ExpectQuery(rx(`
 		SELECT COUNT(*) FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL
 	`)).
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
 
-	// 3) 子一覧
+	// 3) 子一覧（COALESCE(name,'')）
 	childCols := []string{"id", "name", "has_floors", "floor_count"}
 	childRows := sqlmock.NewRows(childCols).
 		AddRow("map_201", "1F", false, 0).
 		AddRow("map_202", "2F", false, 0)
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, has_floors, floor_count
-		  FROM maps
-		 WHERE parent_map_id = ? AND deleted_at IS NULL
-		 ORDER BY name
+	mock.ExpectQuery(rx(`
+		SELECT id, COALESCE(name, ''), has_floors, floor_count
+		FROM maps
+		WHERE parent_map_id = ? AND deleted_at IS NULL
+		ORDER BY name
 	`)).
 		WithArgs(id).
 		WillReturnRows(childRows)
 
-	// Act
 	agg, err := r.FindAggregate(context.Background(), id)
-
-	// Assert
 	if err != nil {
 		t.Fatalf("FindAggregate returned err: %v", err)
 	}
@@ -168,6 +263,10 @@ func TestMapRepository_FindAggregate_OK(t *testing.T) {
 	}
 	if agg.Base.ID != id || agg.ChildrenCount != 2 || len(agg.Children) != 2 {
 		t.Fatalf("unexpected aggregate: %#v", agg)
+	}
+	// LONGTEXT はそのまま返ってくる（base64 変換なし）
+	if agg.Base.ImageData != "IMGPNG" {
+		t.Fatalf("unexpected image_data: %s", agg.Base.ImageData)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -183,14 +282,7 @@ func TestMapRepository_FindAggregate_NoRows(t *testing.T) {
 		"id", "name", "image_data", "natural_width", "natural_height",
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
 	}
-	// 0行を返す → nil
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, image_data, natural_width, natural_height,
-		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
-		  FROM maps
-		 WHERE id = ? AND deleted_at IS NULL
-		 LIMIT 1
-	`)).
+	mock.ExpectQuery(rx(selectOneSQL)).
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows(mainCols))
 
@@ -211,13 +303,7 @@ func TestMapRepository_FindAggregate_QueryError(t *testing.T) {
 	defer cleanup()
 
 	id := "map_123"
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, image_data, natural_width, natural_height,
-		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
-		  FROM maps
-		 WHERE id = ? AND deleted_at IS NULL
-		 LIMIT 1
-	`)).
+	mock.ExpectQuery(rx(selectOneSQL)).
 		WithArgs(id).
 		WillReturnError(assertErr("select failed"))
 
@@ -230,7 +316,9 @@ func TestMapRepository_FindAggregate_QueryError(t *testing.T) {
 	}
 }
 
-// --- FindIndexAggregates ---
+// -----------------------------------------------------------------------------
+// FindIndexAggregates
+// -----------------------------------------------------------------------------
 
 func TestMapRepository_FindIndexAggregates_OK(t *testing.T) {
 	r, mock, cleanup := newMock(t)
@@ -244,26 +332,19 @@ func TestMapRepository_FindIndexAggregates_OK(t *testing.T) {
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
 	}
 	parentRows := sqlmock.NewRows(parentCols).
-		AddRow("p1", "Campus A", "BASE64A", 4096, 3072, nil, true, 3, now, now, nil).
-		AddRow("p2", "Campus B", "BASE64B", 2048, 1536, nil, false, 0, now, now, nil)
+		AddRow("p1", "Campus A", "IMG_A", 4096, 3072, nil, true, 3, now, now, nil).
+		AddRow("p2", "Campus B", "IMG_B", 2048, 1536, nil, false, 0, now, now, nil)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, image_data, natural_width, natural_height,
-		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
-		  FROM maps
-		 WHERE parent_map_id IS NULL
-		   AND deleted_at IS NULL
-		 ORDER BY created_at DESC
-	`)).
+	mock.ExpectQuery(rx(selectParentsSQL)).
 		WillReturnRows(parentRows)
 
 	// 2) 子件数（親ごとに集約）
-	mock.ExpectQuery(regexp.QuoteMeta(`
+	mock.ExpectQuery(rx(`
 		SELECT parent_map_id, COUNT(*)
-		  FROM maps
-		 WHERE deleted_at IS NULL
-		   AND parent_map_id IN (?,?)
-		 GROUP BY parent_map_id
+		FROM maps
+		WHERE deleted_at IS NULL
+		  AND parent_map_id IN (?,?)
+		GROUP BY parent_map_id
 	`)).
 		WithArgs("p1", "p2").
 		WillReturnRows(
@@ -272,34 +353,30 @@ func TestMapRepository_FindIndexAggregates_OK(t *testing.T) {
 				AddRow("p2", 1),
 		)
 
-	// 3) 子の軽量一覧（親ID IN で一括）
+	// 3) 子の軽量一覧（COALESCE(name,'')）
 	childCols := []string{"id", "name", "has_floors", "floor_count", "parent_map_id"}
 	childRows := sqlmock.NewRows(childCols).
 		AddRow("c11", "1F", false, 0, "p1").
 		AddRow("c12", "2F", false, 0, "p1").
 		AddRow("c21", "展示エリア", false, 0, "p2")
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, has_floors, floor_count, parent_map_id
-		  FROM maps
-		 WHERE deleted_at IS NULL
-		   AND parent_map_id IN (?,?)
-		 ORDER BY name ASC
+	mock.ExpectQuery(rx(`
+		SELECT id, COALESCE(name, ''), has_floors, floor_count, parent_map_id
+		FROM maps
+		WHERE deleted_at IS NULL
+		  AND parent_map_id IN (?,?)
+		ORDER BY name ASC
 	`)).
 		WithArgs("p1", "p2").
 		WillReturnRows(childRows)
 
-	// Act
 	ags, err := r.FindIndexAggregates(context.Background())
-
-	// Assert
 	if err != nil {
 		t.Fatalf("FindIndexAggregates returned err: %v", err)
 	}
 	if len(ags) != 2 {
 		t.Fatalf("want 2 parents, got %d", len(ags))
 	}
-
 	// p1
 	if ags[0].Base.ID != "p1" || ags[0].ChildrenCount != 2 || len(ags[0].Children) != 2 {
 		t.Fatalf("unexpected aggregate for p1: %+v", ags[0])
@@ -308,7 +385,10 @@ func TestMapRepository_FindIndexAggregates_OK(t *testing.T) {
 	if ags[1].Base.ID != "p2" || ags[1].ChildrenCount != 1 || len(ags[1].Children) != 1 {
 		t.Fatalf("unexpected aggregate for p2: %+v", ags[1])
 	}
-
+	// 画像（LONGTEXT文字列）検証
+	if ags[0].Base.ImageData != "IMG_A" || ags[1].Base.ImageData != "IMG_B" {
+		t.Fatalf("unexpected images: %s / %s", ags[0].Base.ImageData, ags[1].Base.ImageData)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}
@@ -322,15 +402,8 @@ func TestMapRepository_FindIndexAggregates_NoParents(t *testing.T) {
 		"id", "name", "image_data", "natural_width", "natural_height",
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
 	}
-	// 親0件
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, image_data, natural_width, natural_height,
-		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
-		  FROM maps
-		 WHERE parent_map_id IS NULL
-		   AND deleted_at IS NULL
-		 ORDER BY created_at DESC
-	`)).WillReturnRows(sqlmock.NewRows(parentCols))
+	mock.ExpectQuery(rx(selectParentsSQL)).
+		WillReturnRows(sqlmock.NewRows(parentCols))
 
 	ags, err := r.FindIndexAggregates(context.Background())
 	if err != nil {
@@ -348,14 +421,8 @@ func TestMapRepository_FindIndexAggregates_ParentQueryError(t *testing.T) {
 	r, mock, cleanup := newMock(t)
 	defer cleanup()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, image_data, natural_width, natural_height,
-		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
-		  FROM maps
-		 WHERE parent_map_id IS NULL
-		   AND deleted_at IS NULL
-		 ORDER BY created_at DESC
-	`)).WillReturnError(assertErr("parent select failed"))
+	mock.ExpectQuery(rx(selectParentsSQL)).
+		WillReturnError(assertErr("parent select failed"))
 
 	ags, err := r.FindIndexAggregates(context.Background())
 	if err == nil {
@@ -376,24 +443,18 @@ func TestMapRepository_FindIndexAggregates_CountQueryError(t *testing.T) {
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
 	}
 	parentRows := sqlmock.NewRows(parentCols).
-		AddRow("p1", "Campus A", "BASE64A", 4096, 3072, nil, true, 3, now, now, nil).
-		AddRow("p2", "Campus B", "BASE64B", 2048, 1536, nil, false, 0, now, now, nil)
+		AddRow("p1", "Campus A", "A", 4096, 3072, nil, true, 3, now, now, nil).
+		AddRow("p2", "Campus B", "B", 2048, 1536, nil, false, 0, now, now, nil)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, image_data, natural_width, natural_height,
-		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
-		  FROM maps
-		 WHERE parent_map_id IS NULL
-		   AND deleted_at IS NULL
-		 ORDER BY created_at DESC
-	`)).WillReturnRows(parentRows)
+	mock.ExpectQuery(rx(selectParentsSQL)).
+		WillReturnRows(parentRows)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
+	mock.ExpectQuery(rx(`
 		SELECT parent_map_id, COUNT(*)
-		  FROM maps
-		 WHERE deleted_at IS NULL
-		   AND parent_map_id IN (?,?)
-		 GROUP BY parent_map_id
+		FROM maps
+		WHERE deleted_at IS NULL
+		  AND parent_map_id IN (?,?)
+		GROUP BY parent_map_id
 	`)).
 		WithArgs("p1", "p2").
 		WillReturnError(assertErr("count select failed"))
@@ -417,24 +478,18 @@ func TestMapRepository_FindIndexAggregates_ChildQueryError(t *testing.T) {
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
 	}
 	parentRows := sqlmock.NewRows(parentCols).
-		AddRow("p1", "Campus A", "BASE64A", 4096, 3072, nil, true, 3, now, now, nil).
-		AddRow("p2", "Campus B", "BASE64B", 2048, 1536, nil, false, 0, now, now, nil)
+		AddRow("p1", "Campus A", "A", 4096, 3072, nil, true, 3, now, now, nil).
+		AddRow("p2", "Campus B", "B", 2048, 1536, nil, false, 0, now, now, nil)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, image_data, natural_width, natural_height,
-		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
-		  FROM maps
-		 WHERE parent_map_id IS NULL
-		   AND deleted_at IS NULL
-		 ORDER BY created_at DESC
-	`)).WillReturnRows(parentRows)
+	mock.ExpectQuery(rx(selectParentsSQL)).
+		WillReturnRows(parentRows)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
+	mock.ExpectQuery(rx(`
 		SELECT parent_map_id, COUNT(*)
-		  FROM maps
-		 WHERE deleted_at IS NULL
-		   AND parent_map_id IN (?,?)
-		 GROUP BY parent_map_id
+		FROM maps
+		WHERE deleted_at IS NULL
+		  AND parent_map_id IN (?,?)
+		GROUP BY parent_map_id
 	`)).
 		WithArgs("p1", "p2").
 		WillReturnRows(
@@ -443,12 +498,12 @@ func TestMapRepository_FindIndexAggregates_ChildQueryError(t *testing.T) {
 				AddRow("p2", 1),
 		)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, has_floors, floor_count, parent_map_id
-		  FROM maps
-		 WHERE deleted_at IS NULL
-		   AND parent_map_id IN (?,?)
-		 ORDER BY name ASC
+	mock.ExpectQuery(rx(`
+		SELECT id, COALESCE(name, ''), has_floors, floor_count, parent_map_id
+		FROM maps
+		WHERE deleted_at IS NULL
+		  AND parent_map_id IN (?,?)
+		ORDER BY name ASC
 	`)).
 		WithArgs("p1", "p2").
 		WillReturnError(assertErr("children select failed"))
@@ -462,7 +517,9 @@ func TestMapRepository_FindIndexAggregates_ChildQueryError(t *testing.T) {
 	}
 }
 
-// --- FindMapResponseByID ---
+// -----------------------------------------------------------------------------
+// FindMapResponseByID
+// -----------------------------------------------------------------------------
 
 func TestMapRepository_FindMapResponseByID_OK(t *testing.T) {
 	r, mock, cleanup := newMock(t)
@@ -471,50 +528,39 @@ func TestMapRepository_FindMapResponseByID_OK(t *testing.T) {
 	id := "map_123"
 	now := time.Now().UTC()
 
-	// 1) 本体
 	mainCols := []string{
 		"id", "name", "image_data", "natural_width", "natural_height",
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
 	}
 	mainRow := sqlmock.NewRows(mainCols).AddRow(
-		id, "Campus 2025", "iVBORw0K...", 4096, 3072,
+		id, "Campus 2025", "RAWIMG", 4096, 3072,
 		nil, true, 3, now, now, nil,
 	)
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, image_data, natural_width, natural_height,
-		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
-		  FROM maps
-		 WHERE id = ? AND deleted_at IS NULL
-		 LIMIT 1
-	`)).
+	mock.ExpectQuery(rx(selectOneSQL)).
 		WithArgs(id).
 		WillReturnRows(mainRow)
 
-	// 2) 子件数
-	mock.ExpectQuery(regexp.QuoteMeta(`
+	mock.ExpectQuery(rx(`
 		SELECT COUNT(*) FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL
 	`)).
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
 
-	// 3) 子一覧
+	// 子一覧（COALESCE(name,'')）
 	childCols := []string{"id", "name", "has_floors", "floor_count"}
 	childRows := sqlmock.NewRows(childCols).
 		AddRow("map_201", "1F", false, 0).
 		AddRow("map_202", "2F", false, 0)
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, has_floors, floor_count
-		  FROM maps
-		 WHERE parent_map_id = ? AND deleted_at IS NULL
-		 ORDER BY name
+	mock.ExpectQuery(rx(`
+		SELECT id, COALESCE(name, ''), has_floors, floor_count
+		FROM maps
+		WHERE parent_map_id = ? AND deleted_at IS NULL
+		ORDER BY name
 	`)).
 		WithArgs(id).
 		WillReturnRows(childRows)
 
-	// Act
 	res, err := r.FindMapResponseByID(context.Background(), id)
-
-	// Assert
 	if err != nil {
 		t.Fatalf("FindMapResponseByID returned err: %v", err)
 	}
@@ -523,7 +569,7 @@ func TestMapRepository_FindMapResponseByID_OK(t *testing.T) {
 	}
 	if res.ID != id ||
 		res.Name != "Campus 2025" ||
-		res.ImageData != "iVBORw0K..." ||
+		res.ImageData != "RAWIMG" ||
 		res.NaturalWidth != 4096 ||
 		res.NaturalHeight != 3072 ||
 		res.ParentMapID != nil ||
@@ -552,14 +598,7 @@ func TestMapRepository_FindMapResponseByID_NoRows(t *testing.T) {
 		"id", "name", "image_data", "natural_width", "natural_height",
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
 	}
-	// 0行（= nil）
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, image_data, natural_width, natural_height,
-		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
-		  FROM maps
-		 WHERE id = ? AND deleted_at IS NULL
-		 LIMIT 1
-	`)).
+	mock.ExpectQuery(rx(selectOneSQL)).
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows(mainCols))
 
@@ -581,13 +620,7 @@ func TestMapRepository_FindMapResponseByID_QueryError(t *testing.T) {
 
 	id := "map_123"
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, image_data, natural_width, natural_height,
-		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
-		  FROM maps
-		 WHERE id = ? AND deleted_at IS NULL
-		 LIMIT 1
-	`)).
+	mock.ExpectQuery(rx(selectOneSQL)).
 		WithArgs(id).
 		WillReturnError(assertErr("select failed"))
 
@@ -607,47 +640,36 @@ func TestMapRepository_FindMapResponseByID_NoChildren(t *testing.T) {
 	id := "map_123"
 	now := time.Now().UTC()
 
-	// 1) 本体
 	mainCols := []string{
 		"id", "name", "image_data", "natural_width", "natural_height",
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
 	}
 	mainRow := sqlmock.NewRows(mainCols).AddRow(
-		id, "Campus 2025", "iVBORw0K...", 4096, 3072,
+		id, "Empty Child Map", "X", 1024, 768,
 		nil, false, 0, now, now, nil,
 	)
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, image_data, natural_width, natural_height,
-		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
-		  FROM maps
-		 WHERE id = ? AND deleted_at IS NULL
-		 LIMIT 1
-	`)).
+	mock.ExpectQuery(rx(selectOneSQL)).
 		WithArgs(id).
 		WillReturnRows(mainRow)
 
-	// 2) 子件数=0
-	mock.ExpectQuery(regexp.QuoteMeta(`
+	mock.ExpectQuery(rx(`
 		SELECT COUNT(*) FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL
 	`)).
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 
-	// 3) 子一覧=0行
+	// 子一覧=0行（COALESCE(name,'')）
 	childCols := []string{"id", "name", "has_floors", "floor_count"}
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, has_floors, floor_count
-		  FROM maps
-		 WHERE parent_map_id = ? AND deleted_at IS NULL
-		 ORDER BY name
+	mock.ExpectQuery(rx(`
+		SELECT id, COALESCE(name, ''), has_floors, floor_count
+		FROM maps
+		WHERE parent_map_id = ? AND deleted_at IS NULL
+		ORDER BY name
 	`)).
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows(childCols))
 
-	// Act
 	res, err := r.FindMapResponseByID(context.Background(), id)
-
-	// Assert
 	if err != nil {
 		t.Fatalf("FindMapResponseByID returned err: %v", err)
 	}
@@ -660,12 +682,17 @@ func TestMapRepository_FindMapResponseByID_NoChildren(t *testing.T) {
 	if res.HasFloors || res.FloorCount != 0 {
 		t.Fatalf("unexpected floors flags: hasFloors=%v floorCount=%d", res.HasFloors, res.FloorCount)
 	}
+	if res.ImageData != "X" {
+		t.Fatalf("unexpected image: %s", res.ImageData)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}
 }
 
-// --- UpdatePartial (PATCH) ---
+// -----------------------------------------------------------------------------
+// UpdatePartial（PATCH） LONGTEXT対応（image_data は文字列のまま）
+// -----------------------------------------------------------------------------
 
 func TestMapRepository_UpdatePartial_UpdateSomeFields_OK(t *testing.T) {
 	r, mock, cleanup := newMock(t)
@@ -674,85 +701,68 @@ func TestMapRepository_UpdatePartial_UpdateSomeFields_OK(t *testing.T) {
 	id := "map_123"
 	now := time.Now().UTC()
 
-	// 現在値（更新前）
 	mainCols := []string{
 		"id", "name", "image_data", "natural_width", "natural_height",
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
 	}
 	mainRow := sqlmock.NewRows(mainCols).AddRow(
-		id, "Old Name", "BASE64_OLD", 1024, 768,
+		id, "Old Name", "OLD", 1024, 768,
 		nil, false, 0, now.Add(-time.Hour), now.Add(-time.Hour), nil,
 	)
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, image_data, natural_width, natural_height,
-		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
-		  FROM maps
-		 WHERE id = ? AND deleted_at IS NULL
-		 LIMIT 1
-	`)).
+	mock.ExpectQuery(rx(selectOneSQL)).
 		WithArgs(id).
 		WillReturnRows(mainRow)
 
-	// 期待: name, natural_width, parent_map_id, has_floors, floor_count を更新 + modified_at
-	mock.ExpectExec(regexp.QuoteMeta(`
-		UPDATE maps SET name = ?, natural_width = ?, parent_map_id = ?, has_floors = ?, floor_count = ?, modified_at = ? WHERE id = ? AND deleted_at IS NULL
+	mock.ExpectExec(rx(`
+		UPDATE maps
+		SET name = ?, natural_width = ?, parent_map_id = ?, modified_at = ?
+		WHERE id = ? AND deleted_at IS NULL
 	`)).
-		WithArgs("New Campus", 2048, "parent_1", true, 2, sqlmock.AnyArg(), id).
+		WithArgs("New Campus", 2048, "parent_1", sqlmock.AnyArg(), id).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	// 更新後の再取得（FindMapResponseByID）
 	afterRow := sqlmock.NewRows(mainCols).AddRow(
-		id, "New Campus", "BASE64_OLD", 2048, 768,
-		"parent_1", true, 2, now.Add(-time.Hour), now.Add(time.Minute), nil,
+		id, "New Campus", "OLD", 2048, 768,
+		"parent_1", false, 0, now.Add(-time.Hour), now.Add(time.Minute), nil,
 	)
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, image_data, natural_width, natural_height,
-		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
-		  FROM maps
-		 WHERE id = ? AND deleted_at IS NULL
-		 LIMIT 1
-	`)).
+	mock.ExpectQuery(rx(selectOneSQL)).
 		WithArgs(id).
 		WillReturnRows(afterRow)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
+	mock.ExpectQuery(rx(`
 		SELECT COUNT(*) FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL
 	`)).
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 
 	childCols := []string{"id", "name", "has_floors", "floor_count"}
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, has_floors, floor_count
-		  FROM maps
-		 WHERE parent_map_id = ? AND deleted_at IS NULL
-		 ORDER BY name
+	mock.ExpectQuery(rx(`
+		SELECT id, COALESCE(name, ''), has_floors, floor_count
+		FROM maps
+		WHERE parent_map_id = ? AND deleted_at IS NULL
+		ORDER BY name
 	`)).
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows(childCols))
 
-	// リクエスト
 	req := &repository.MapUpdateRequest{
 		Name:         repository.OptionalString{Set: true, Value: "New Campus"},
 		NaturalWidth: repository.OptionalInt{Set: true, Value: 2048},
-		// naturalHeight は未指定（据置）
-		ParentMapID: repository.OptionalString{Set: true, Value: "parent_1"},
-		HasFloors:   repository.OptionalBool{Set: true, Value: true},
-		FloorCount:  repository.OptionalInt{Set: true, Value: 2},
+		ParentMapID:  repository.OptionalString{Set: true, Value: "parent_1"},
 	}
 
-	// Act
 	got, err := r.UpdatePartial(context.Background(), id, req)
-
-	// Assert
 	if err != nil {
 		t.Fatalf("UpdatePartial returned err: %v", err)
 	}
-	if got == nil || got.ID != id || got.Name != "New Campus" || got.NaturalWidth != 2048 || !got.HasFloors || got.FloorCount != 2 {
+	if got == nil || got.ID != id || got.Name != "New Campus" || got.NaturalWidth != 2048 {
 		t.Fatalf("unexpected updated response: %+v", got)
 	}
 	if got.ParentMapID == nil || *got.ParentMapID != "parent_1" {
 		t.Fatalf("expected parent_map_id=parent_1, got: %+v", got.ParentMapID)
+	}
+	if got.ImageData != "OLD" {
+		t.Fatalf("unexpected image after update: %s", got.ImageData)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -766,68 +776,53 @@ func TestMapRepository_UpdatePartial_ClearParentToNULL_OK(t *testing.T) {
 	id := "map_456"
 	now := time.Now().UTC()
 
-	// 現在は親つき・階層あり
 	mainCols := []string{
 		"id", "name", "image_data", "natural_width", "natural_height",
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
 	}
 	mainRow := sqlmock.NewRows(mainCols).AddRow(
-		id, "Bldg", "BASE64", 3000, 2000,
+		id, "Bldg", "IMG", 3000, 2000,
 		"parent_old", true, 5, now.Add(-time.Hour), now.Add(-time.Hour), nil,
 	)
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, image_data, natural_width, natural_height,
-		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
-		  FROM maps
-		 WHERE id = ? AND deleted_at IS NULL
-		 LIMIT 1
-	`)).
+	mock.ExpectQuery(rx(selectOneSQL)).
 		WithArgs(id).
 		WillReturnRows(mainRow)
 
-	// 期待: parent_map_id を NULL に、has_floors=false に伴い floor_count=0 へ正規化
-	mock.ExpectExec(regexp.QuoteMeta(`
-		UPDATE maps SET parent_map_id = NULL, has_floors = ?, floor_count = ?, modified_at = ? WHERE id = ? AND deleted_at IS NULL
+	mock.ExpectExec(rx(`
+		UPDATE maps
+		SET parent_map_id = NULL, modified_at = ?
+		WHERE id = ? AND deleted_at IS NULL
 	`)).
-		WithArgs(false, 0, sqlmock.AnyArg(), id).
+		WithArgs(sqlmock.AnyArg(), id).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	// 更新後の再取得
 	afterRow := sqlmock.NewRows(mainCols).AddRow(
-		id, "Bldg", "BASE64", 3000, 2000,
-		nil, false, 0, now.Add(-time.Hour), now.Add(time.Minute), nil,
+		id, "Bldg", "IMG", 3000, 2000,
+		nil, true, 5, now.Add(-time.Hour), now.Add(time.Minute), nil,
 	)
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, image_data, natural_width, natural_height,
-		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
-		  FROM maps
-		 WHERE id = ? AND deleted_at IS NULL
-		 LIMIT 1
-	`)).
+	mock.ExpectQuery(rx(selectOneSQL)).
 		WithArgs(id).
 		WillReturnRows(afterRow)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
+	mock.ExpectQuery(rx(`
 		SELECT COUNT(*) FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL
 	`)).
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 
 	childCols := []string{"id", "name", "has_floors", "floor_count"}
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, has_floors, floor_count
-		  FROM maps
-		 WHERE parent_map_id = ? AND deleted_at IS NULL
-		 ORDER BY name
+	mock.ExpectQuery(rx(`
+		SELECT id, COALESCE(name, ''), has_floors, floor_count
+		FROM maps
+		WHERE parent_map_id = ? AND deleted_at IS NULL
+		ORDER BY name
 	`)).
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows(childCols))
 
 	req := &repository.MapUpdateRequest{
-		// JSONの null を想定：Value="" で NULL に解釈
+		// JSON null を想定（Value="" で NULL 解釈）
 		ParentMapID: repository.OptionalString{Set: true, Value: ""},
-		HasFloors:   repository.OptionalBool{Set: true, Value: false},
-		// FloorCount 未指定でも false に正規化され 0 になる
 	}
 
 	got, err := r.UpdatePartial(context.Background(), id, req)
@@ -837,8 +832,8 @@ func TestMapRepository_UpdatePartial_ClearParentToNULL_OK(t *testing.T) {
 	if got.ParentMapID != nil {
 		t.Fatalf("expected parent_map_id=NULL, got: %+v", got.ParentMapID)
 	}
-	if got.HasFloors || got.FloorCount != 0 {
-		t.Fatalf("expected hasFloors=false & floorCount=0; got hasFloors=%v floorCount=%d", got.HasFloors, got.FloorCount)
+	if got.ImageData != "IMG" {
+		t.Fatalf("unexpected image: %s", got.ImageData)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -852,7 +847,6 @@ func TestMapRepository_UpdatePartial_NoChange_NoUpdate(t *testing.T) {
 	id := "map_same"
 	now := time.Now().UTC()
 
-	// 現在値
 	mainCols := []string{
 		"id", "name", "image_data", "natural_width", "natural_height",
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
@@ -861,30 +855,23 @@ func TestMapRepository_UpdatePartial_NoChange_NoUpdate(t *testing.T) {
 		id, "Same", "IMG", 1000, 800,
 		nil, false, 0, now.Add(-time.Hour), now.Add(-time.Hour), nil,
 	)
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, image_data, natural_width, natural_height,
-		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
-		  FROM maps
-		 WHERE id = ? AND deleted_at IS NULL
-		 LIMIT 1
-	`)).
+	mock.ExpectQuery(rx(selectOneSQL)).
 		WithArgs(id).
 		WillReturnRows(mainRow)
 
-	// リクエストは全フィールド未指定（=変更なし）
 	req := &repository.MapUpdateRequest{}
 
-	// Act
 	got, err := r.UpdatePartial(context.Background(), id, req)
-
-	// Assert: UPDATE は発行されず、そのまま現在値を詰め替えて返る
 	if err != nil {
 		t.Fatalf("UpdatePartial returned err: %v", err)
 	}
 	if got == nil || got.ID != id || got.Name != "Same" || got.NaturalWidth != 1000 || got.NaturalHeight != 800 {
 		t.Fatalf("unexpected response for no-change patch: %+v", got)
 	}
-	// ここでは FindMapResponseByID を呼ばない実装なので、追加のクエリ期待は無し
+	if got.ImageData != "IMG" {
+		t.Fatalf("unexpected image: %s", got.ImageData)
+	}
+	// UPDATE/再読込無し
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}
@@ -900,14 +887,7 @@ func TestMapRepository_UpdatePartial_NotFound(t *testing.T) {
 		"id", "name", "image_data", "natural_width", "natural_height",
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
 	}
-	// 0行 -> sql.ErrNoRows 想定で nil を返す
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, image_data, natural_width, natural_height,
-		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
-		  FROM maps
-		 WHERE id = ? AND deleted_at IS NULL
-		 LIMIT 1
-	`)).
+	mock.ExpectQuery(rx(selectOneSQL)).
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows(mainCols))
 
@@ -922,47 +902,6 @@ func TestMapRepository_UpdatePartial_NotFound(t *testing.T) {
 	}
 }
 
-func TestMapRepository_UpdatePartial_ValidationError_Floors(t *testing.T) {
-	r, mock, cleanup := newMock(t)
-	defer cleanup()
-
-	id := "map_v"
-	now := time.Now().UTC()
-
-	// 現在値（has_floors=false, floor_count=0）
-	mainCols := []string{
-		"id", "name", "image_data", "natural_width", "natural_height",
-		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
-	}
-	mainRow := sqlmock.NewRows(mainCols).AddRow(
-		id, "X", "IMG", 100, 100, nil, false, 0, now.Add(-time.Hour), now.Add(-time.Hour), nil,
-	)
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, image_data, natural_width, natural_height,
-		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
-		  FROM maps
-		 WHERE id = ? AND deleted_at IS NULL
-		 LIMIT 1
-	`)).
-		WithArgs(id).
-		WillReturnRows(mainRow)
-
-	// リクエスト: hasFloors=true だが floorCount=0 -> バリデーションエラー
-	req := &repository.MapUpdateRequest{
-		HasFloors:  repository.OptionalBool{Set: true, Value: true},
-		FloorCount: repository.OptionalInt{Set: true, Value: 0},
-	}
-
-	got, err := r.UpdatePartial(context.Background(), id, req)
-	if err == nil {
-		t.Fatalf("expected validation error, got nil; res=%#v", got)
-	}
-	// UPDATE は走らないのでここで終了
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
-	}
-}
-
 func TestMapRepository_UpdatePartial_UpdateExecError(t *testing.T) {
 	r, mock, cleanup := newMock(t)
 	defer cleanup()
@@ -970,7 +909,6 @@ func TestMapRepository_UpdatePartial_UpdateExecError(t *testing.T) {
 	id := "map_err"
 	now := time.Now().UTC()
 
-	// 現在値
 	mainCols := []string{
 		"id", "name", "image_data", "natural_width", "natural_height",
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
@@ -978,19 +916,14 @@ func TestMapRepository_UpdatePartial_UpdateExecError(t *testing.T) {
 	mainRow := sqlmock.NewRows(mainCols).AddRow(
 		id, "Old", "IMG", 100, 100, nil, false, 0, now.Add(-time.Hour), now.Add(-time.Hour), nil,
 	)
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, name, image_data, natural_width, natural_height,
-		       parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at
-		  FROM maps
-		 WHERE id = ? AND deleted_at IS NULL
-		 LIMIT 1
-	`)).
+	mock.ExpectQuery(rx(selectOneSQL)).
 		WithArgs(id).
 		WillReturnRows(mainRow)
 
-	// UPDATE でエラー
-	mock.ExpectExec(regexp.QuoteMeta(`
-		UPDATE maps SET name = ?, modified_at = ? WHERE id = ? AND deleted_at IS NULL
+	mock.ExpectExec(rx(`
+		UPDATE maps
+		SET name = ?, modified_at = ?
+		WHERE id = ? AND deleted_at IS NULL
 	`)).
 		WithArgs("New", sqlmock.AnyArg(), id).
 		WillReturnError(assertErr("update failed"))
@@ -1008,7 +941,9 @@ func TestMapRepository_UpdatePartial_UpdateExecError(t *testing.T) {
 	}
 }
 
-// --- DeleteCascade (DELETE) ---
+// -----------------------------------------------------------------------------
+// DeleteCascade（DELETE）
+// -----------------------------------------------------------------------------
 
 func TestMapRepository_DeleteCascade_OK(t *testing.T) {
 	r, mock, cleanup := newMock(t)
@@ -1016,56 +951,51 @@ func TestMapRepository_DeleteCascade_OK(t *testing.T) {
 
 	rootID := "map_root"
 
-	// Tx begin
 	mock.ExpectBegin()
 
-	// 1) 存在確認: COUNT(*)=1
-	mock.ExpectQuery(regexp.QuoteMeta(`
+	mock.ExpectQuery(rx(`
 		SELECT COUNT(*)
-		  FROM maps
-		 WHERE id = ? AND deleted_at IS NULL
-		 LIMIT 1
+		FROM maps
+		WHERE id = ? AND deleted_at IS NULL
+		LIMIT 1
 	`)).
 		WithArgs(rootID).
 		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(1))
 
-	// 2) pins 削除（再帰CTE）
-	mock.ExpectExec(regexp.QuoteMeta(`
+	mock.ExpectExec(rx(`
 		WITH RECURSIVE submaps AS (
 			SELECT id
-			  FROM maps
-			 WHERE id = ? AND deleted_at IS NULL
+			FROM maps
+			WHERE id = ? AND deleted_at IS NULL
 			UNION ALL
 			SELECT m.id
-			  FROM maps m
-			  JOIN submaps s ON m.parent_map_id = s.id
-			 WHERE m.deleted_at IS NULL
+			FROM maps m
+			JOIN submaps s ON m.parent_map_id = s.id
+			WHERE m.deleted_at IS NULL
 		)
 		DELETE p FROM pins p
 		JOIN submaps sm ON p.map_id = sm.id
 	`)).
 		WithArgs(rootID).
-		WillReturnResult(sqlmock.NewResult(0, 5)) // pins 5件削除
+		WillReturnResult(sqlmock.NewResult(0, 5))
 
-	// 3) maps 削除（再帰CTE）
-	mock.ExpectExec(regexp.QuoteMeta(`
+	mock.ExpectExec(rx(`
 		WITH RECURSIVE submaps AS (
 			SELECT id
-			  FROM maps
-			 WHERE id = ? AND deleted_at IS NULL
+			FROM maps
+			WHERE id = ? AND deleted_at IS NULL
 			UNION ALL
 			SELECT m.id
-			  FROM maps m
-			  JOIN submaps s ON m.parent_map_id = s.id
-			 WHERE m.deleted_at IS NULL
+			FROM maps m
+			JOIN submaps s ON m.parent_map_id = s.id
+			WHERE m.deleted_at IS NULL
 		)
 		DELETE m FROM maps m
 		JOIN submaps sm ON m.id = sm.id
 	`)).
 		WithArgs(rootID).
-		WillReturnResult(sqlmock.NewResult(0, 3)) // maps 3件削除（root+子2など想定）
+		WillReturnResult(sqlmock.NewResult(0, 3))
 
-	// commit
 	mock.ExpectCommit()
 
 	mapsDel, pinsDel, err := r.DeleteCascade(context.Background(), rootID)
@@ -1075,7 +1005,6 @@ func TestMapRepository_DeleteCascade_OK(t *testing.T) {
 	if mapsDel != 3 || pinsDel != 5 {
 		t.Fatalf("unexpected affected rows: maps=%d pins=%d", mapsDel, pinsDel)
 	}
-
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}
@@ -1088,11 +1017,11 @@ func TestMapRepository_DeleteCascade_NotFound(t *testing.T) {
 	rootID := "missing"
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta(`
+	mock.ExpectQuery(rx(`
 		SELECT COUNT(*)
-		  FROM maps
-		 WHERE id = ? AND deleted_at IS NULL
-		 LIMIT 1
+		FROM maps
+		WHERE id = ? AND deleted_at IS NULL
+		LIMIT 1
 	`)).
 		WithArgs(rootID).
 		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(0))
@@ -1114,11 +1043,11 @@ func TestMapRepository_DeleteCascade_ExistSelectError(t *testing.T) {
 	rootID := "map_x"
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta(`
+	mock.ExpectQuery(rx(`
 		SELECT COUNT(*)
-		  FROM maps
-		 WHERE id = ? AND deleted_at IS NULL
-		 LIMIT 1
+		FROM maps
+		WHERE id = ? AND deleted_at IS NULL
+		LIMIT 1
 	`)).
 		WithArgs(rootID).
 		WillReturnError(assertErr("exist select failed"))
@@ -1140,25 +1069,25 @@ func TestMapRepository_DeleteCascade_DeletePinsError(t *testing.T) {
 	rootID := "map_err_pins"
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta(`
+	mock.ExpectQuery(rx(`
 		SELECT COUNT(*)
-		  FROM maps
-		 WHERE id = ? AND deleted_at IS NULL
-		 LIMIT 1
+		FROM maps
+		WHERE id = ? AND deleted_at IS NULL
+		LIMIT 1
 	`)).
 		WithArgs(rootID).
 		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(1))
 
-	mock.ExpectExec(regexp.QuoteMeta(`
+	mock.ExpectExec(rx(`
 		WITH RECURSIVE submaps AS (
 			SELECT id
-			  FROM maps
-			 WHERE id = ? AND deleted_at IS NULL
+			FROM maps
+			WHERE id = ? AND deleted_at IS NULL
 			UNION ALL
 			SELECT m.id
-			  FROM maps m
-			  JOIN submaps s ON m.parent_map_id = s.id
-			 WHERE m.deleted_at IS NULL
+			FROM maps m
+			JOIN submaps s ON m.parent_map_id = s.id
+			WHERE m.deleted_at IS NULL
 		)
 		DELETE p FROM pins p
 		JOIN submaps sm ON p.map_id = sm.id
@@ -1184,25 +1113,25 @@ func TestMapRepository_DeleteCascade_DeleteMapsError(t *testing.T) {
 	rootID := "map_err_maps"
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta(`
+	mock.ExpectQuery(rx(`
 		SELECT COUNT(*)
-		  FROM maps
-		 WHERE id = ? AND deleted_at IS NULL
-		 LIMIT 1
+		FROM maps
+		WHERE id = ? AND deleted_at IS NULL
+		LIMIT 1
 	`)).
 		WithArgs(rootID).
 		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(1))
 
-	mock.ExpectExec(regexp.QuoteMeta(`
+	mock.ExpectExec(rx(`
 		WITH RECURSIVE submaps AS (
 			SELECT id
-			  FROM maps
-			 WHERE id = ? AND deleted_at IS NULL
+			FROM maps
+			WHERE id = ? AND deleted_at IS NULL
 			UNION ALL
 			SELECT m.id
-			  FROM maps m
-			  JOIN submaps s ON m.parent_map_id = s.id
-			 WHERE m.deleted_at IS NULL
+			FROM maps m
+			JOIN submaps s ON m.parent_map_id = s.id
+			WHERE m.deleted_at IS NULL
 		)
 		DELETE p FROM pins p
 		JOIN submaps sm ON p.map_id = sm.id
@@ -1210,16 +1139,16 @@ func TestMapRepository_DeleteCascade_DeleteMapsError(t *testing.T) {
 		WithArgs(rootID).
 		WillReturnResult(sqlmock.NewResult(0, 2))
 
-	mock.ExpectExec(regexp.QuoteMeta(`
+	mock.ExpectExec(rx(`
 		WITH RECURSIVE submaps AS (
 			SELECT id
-			  FROM maps
-			 WHERE id = ? AND deleted_at IS NULL
+			FROM maps
+			WHERE id = ? AND deleted_at IS NULL
 			UNION ALL
 			SELECT m.id
-			  FROM maps m
-			  JOIN submaps s ON m.parent_map_id = s.id
-			 WHERE m.deleted_at IS NULL
+			FROM maps m
+			JOIN submaps s ON m.parent_map_id = s.id
+			WHERE m.deleted_at IS NULL
 		)
 		DELETE m FROM maps m
 		JOIN submaps sm ON m.id = sm.id
@@ -1245,25 +1174,25 @@ func TestMapRepository_DeleteCascade_CommitError(t *testing.T) {
 	rootID := "map_commit_err"
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta(`
+	mock.ExpectQuery(rx(`
 		SELECT COUNT(*)
-		  FROM maps
-		 WHERE id = ? AND deleted_at IS NULL
-		 LIMIT 1
+		FROM maps
+		WHERE id = ? AND deleted_at IS NULL
+		LIMIT 1
 	`)).
 		WithArgs(rootID).
 		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(1))
 
-	mock.ExpectExec(regexp.QuoteMeta(`
+	mock.ExpectExec(rx(`
 		WITH RECURSIVE submaps AS (
 			SELECT id
-			  FROM maps
-			 WHERE id = ? AND deleted_at IS NULL
+			FROM maps
+			WHERE id = ? AND deleted_at IS NULL
 			UNION ALL
 			SELECT m.id
-			  FROM maps m
-			  JOIN submaps s ON m.parent_map_id = s.id
-			 WHERE m.deleted_at IS NULL
+			FROM maps m
+			JOIN submaps s ON m.parent_map_id = s.id
+			WHERE m.deleted_at IS NULL
 		)
 		DELETE p FROM pins p
 		JOIN submaps sm ON p.map_id = sm.id
@@ -1271,16 +1200,16 @@ func TestMapRepository_DeleteCascade_CommitError(t *testing.T) {
 		WithArgs(rootID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	mock.ExpectExec(regexp.QuoteMeta(`
+	mock.ExpectExec(rx(`
 		WITH RECURSIVE submaps AS (
 			SELECT id
-			  FROM maps
-			 WHERE id = ? AND deleted_at IS NULL
+			FROM maps
+			WHERE id = ? AND deleted_at IS NULL
 			UNION ALL
 			SELECT m.id
-			  FROM maps m
-			  JOIN submaps s ON m.parent_map_id = s.id
-			 WHERE m.deleted_at IS NULL
+			FROM maps m
+			JOIN submaps s ON m.parent_map_id = s.id
+			WHERE m.deleted_at IS NULL
 		)
 		DELETE m FROM maps m
 		JOIN submaps sm ON m.id = sm.id
