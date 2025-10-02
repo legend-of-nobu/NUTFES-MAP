@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
-	"strings"
 	"testing"
 	"time"
 
@@ -24,25 +22,14 @@ type customValidator struct{ v *validator.Validate }
 
 func (cv *customValidator) Validate(i any) error { return cv.v.Struct(i) }
 
-// 改行/空白差異を吸収して SQL 正規表現マッチを安定させる
-func rx(s string) string {
-	s = strings.TrimSpace(s)
-	s = regexp.QuoteMeta(s)
-	s = strings.ReplaceAll(s, "\\\n", "\\s+")
-	s = strings.ReplaceAll(s, "\\t", "\\s+")
-	s = strings.ReplaceAll(s, "\\  ", "\\s+")
-	s = strings.ReplaceAll(s, "\\ ", "\\s+")
-	return s
-}
-
 // 固定エラータイプ（比較しやすいように）
 type assertErr string
 
 func (e assertErr) Error() string { return string(e) }
 
-// Echo + Handler + sqlmock をまとめて起動
+// Echo + Handler + sqlmock をまとめて起動（クエリは完全一致マッチ）
 func setupEchoWithMock(t *testing.T) (*echo.Echo, sqlmock.Sqlmock, func()) {
-	db, mock, err := sqlmock.New()
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	if err != nil {
 		t.Fatalf("sqlmock.New error: %v", err)
 	}
@@ -63,44 +50,31 @@ func setupEchoWithMock(t *testing.T) (*echo.Echo, sqlmock.Sqlmock, func()) {
 	return e, mock, cleanup
 }
 
-// ========= SQL 断片（LONGTEXT仕様：COALESCE(image_data,'')） =========
+// ========= リポジトリ実装と完全一致させた SQL 文字列 =========
 
-const selectOneSQL = `
-SELECT
-  id,
-  COALESCE(name, ''),
-  COALESCE(image_data, ''),
-  COALESCE(natural_width, 0),
-  COALESCE(natural_height, 0),
-  parent_map_id,
-  has_floors,
-  floor_count,
-  created_at,
-  modified_at,
-  deleted_at
-FROM maps
-WHERE id = ? AND deleted_at IS NULL
-LIMIT 1
-`
+const selectOneSQL = "SELECT id, COALESCE(name, ''), COALESCE(image_data, ''), COALESCE(natural_width, 0), COALESCE(natural_height, 0), parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at FROM maps WHERE id = ? AND deleted_at IS NULL LIMIT 1"
 
-const selectParentsSQL = `
-SELECT
-  id,
-  COALESCE(name, ''),
-  COALESCE(image_data, ''),
-  COALESCE(natural_width, 0),
-  COALESCE(natural_height, 0),
-  parent_map_id,
-  has_floors,
-  floor_count,
-  created_at,
-  modified_at,
-  deleted_at
-FROM maps
-WHERE parent_map_id IS NULL
-  AND deleted_at IS NULL
-ORDER BY created_at DESC
-`
+const selectParentsSQL = "SELECT id, COALESCE(name, ''), COALESCE(image_data, ''), COALESCE(natural_width, 0), COALESCE(natural_height, 0), parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at FROM maps WHERE parent_map_id IS NULL AND deleted_at IS NULL ORDER BY created_at DESC"
+
+const countChildrenSQL = "SELECT COUNT(*) FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL"
+
+const childrenListSQL = "SELECT id, COALESCE(name, ''), has_floors, floor_count FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL ORDER BY name"
+
+const indexCountByParentsSQL = "SELECT parent_map_id, COUNT(*) FROM maps WHERE deleted_at IS NULL AND parent_map_id IN (?,?) GROUP BY parent_map_id"
+
+const indexChildrenByParentsSQL = "SELECT id, COALESCE(name, ''), has_floors, floor_count, parent_map_id FROM maps WHERE deleted_at IS NULL AND parent_map_id IN (?,?) ORDER BY name ASC"
+
+const insertEmptyMapSQL = "INSERT INTO maps (id, name, image_data, natural_width, natural_height, parent_map_id, has_floors, floor_count, created_at, modified_at) VALUES (?,?,?,?,?,?,?,?,?,?)"
+
+const parentCheckForUpdateSQL = "SELECT COUNT(*) FROM maps WHERE id = ? AND parent_map_id IS NULL AND deleted_at IS NULL FOR UPDATE"
+
+const parentAggregateUpdateSQL = "UPDATE maps SET has_floors = TRUE, floor_count = floor_count + 1, modified_at = ? WHERE id = ? AND deleted_at IS NULL"
+
+const selectExistForDeleteSQL = "SELECT COUNT(*) FROM maps WHERE id = ? AND deleted_at IS NULL LIMIT 1"
+
+const deletePinsCascadeSQL = "WITH RECURSIVE submaps AS (SELECT id FROM maps WHERE id = ? AND deleted_at IS NULL UNION ALL SELECT m.id FROM maps m JOIN submaps s ON m.parent_map_id = s.id WHERE m.deleted_at IS NULL) DELETE p FROM pins p JOIN submaps sm ON p.map_id = sm.id"
+
+const deleteMapsCascadeSQL = "WITH RECURSIVE submaps AS (SELECT id FROM maps WHERE id = ? AND deleted_at IS NULL UNION ALL SELECT m.id FROM maps m JOIN submaps s ON m.parent_map_id = s.id WHERE m.deleted_at IS NULL) DELETE m FROM maps m JOIN submaps sm ON m.id = sm.id"
 
 // ========= テスト =========
 
@@ -108,23 +82,27 @@ func TestMapHandler_Create_OK_Minimal(t *testing.T) {
 	e, mock, cleanup := setupEchoWithMock(t)
 	defer cleanup()
 
-	// INSERT（ゼロ値を明示挿入する8カラム版）image_data は NULL（LONGTEXT）
-	mock.ExpectExec(rx(`
-		INSERT INTO maps (
-			id, name, image_data, natural_width, natural_height, parent_map_id, created_at, modified_at
-		) VALUES (?,?,?,?,?,?,?,?)
-	`)).
+	// トランザクション開始
+	mock.ExpectBegin()
+
+	// INSERT（has_floors=false, floor_count=0 を明示する10カラム版）image_data は NULL（LONGTEXT）
+	mock.ExpectExec(insertEmptyMapSQL).
 		WithArgs(
 			sqlmock.AnyArg(), // id
 			"",               // name
-			nil,              // image_data (LONGTEXT → NULL 挿入)
+			nil,              // image_data (NULL 挿入)
 			0,                // natural_width
 			0,                // natural_height
 			nil,              // parent_map_id
+			false,            // has_floors
+			0,                // floor_count
 			sqlmock.AnyArg(), // created_at
 			sqlmock.AnyArg(), // modified_at
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// コミット
+	mock.ExpectCommit()
 
 	// main select（空マップ直後）
 	now := time.Now().UTC()
@@ -136,24 +114,17 @@ func TestMapHandler_Create_OK_Minimal(t *testing.T) {
 		"map_dummy", "", "", 0, 0,
 		nil, false, 0, now, now, nil,
 	)
-	mock.ExpectQuery(rx(selectOneSQL)).
+	mock.ExpectQuery(selectOneSQL).
 		WithArgs(sqlmock.AnyArg()). // newID
 		WillReturnRows(mainRow)
 
 	// children count
-	mock.ExpectQuery(rx(`
-		SELECT COUNT(*) FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL
-	`)).
+	mock.ExpectQuery(countChildrenSQL).
 		WithArgs("map_dummy").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 
 	// children list（0行）
-	mock.ExpectQuery(rx(`
-		SELECT id, COALESCE(name, ''), has_floors, floor_count
-		FROM maps
-		WHERE parent_map_id = ? AND deleted_at IS NULL
-		ORDER BY name
-	`)).
+	mock.ExpectQuery(childrenListSQL).
 		WithArgs("map_dummy").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "has_floors", "floor_count"}))
 
@@ -168,7 +139,7 @@ func TestMapHandler_Create_OK_Minimal(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var resp handlers.MapResponse
+	var resp repository.MapResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("response json unmarshal error: %v, body=%s", err, rec.Body.String())
 	}
@@ -187,22 +158,35 @@ func TestMapHandler_Create_WithParent_OK(t *testing.T) {
 	e, mock, cleanup := setupEchoWithMock(t)
 	defer cleanup()
 
-	// INSERT with parent（8カラム版）
-	mock.ExpectExec(rx(`
-		INSERT INTO maps (
-			id, name, image_data, natural_width, natural_height, parent_map_id, created_at, modified_at
-		) VALUES (?,?,?,?,?,?,?,?)
-	`)).
+	// トランザクション開始
+	mock.ExpectBegin()
+
+	// 親 root の存在チェック（FOR UPDATE）
+	mock.ExpectQuery(parentCheckForUpdateSQL).
+		WithArgs("parent_1").
+		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(1))
+
+	// floor 行の INSERT（親ID設定, has_floors=false, floor_count=0）
+	mock.ExpectExec(insertEmptyMapSQL).
 		WithArgs(
-			sqlmock.AnyArg(),
-			"",  // name
-			nil, // image_data (NULL)
-			0,   // natural_width
-			0,   // natural_height
-			"parent_1",
+			sqlmock.AnyArg(), // id
+			"",               // name
+			nil,              // image_data
+			0, 0,
+			"parent_1", // parent_map_id
+			false,      // has_floors
+			0,          // floor_count
 			sqlmock.AnyArg(), sqlmock.AnyArg(),
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// 親 root の集約値更新（has_floors=true, floor_count+1）
+	mock.ExpectExec(parentAggregateUpdateSQL).
+		WithArgs(sqlmock.AnyArg(), "parent_1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// コミット
+	mock.ExpectCommit()
 
 	// main select（親が付与されて返る）
 	now := time.Now().UTC()
@@ -214,22 +198,15 @@ func TestMapHandler_Create_WithParent_OK(t *testing.T) {
 		"map_dummy", "", "", 0, 0,
 		"parent_1", false, 0, now, now, nil,
 	)
-	mock.ExpectQuery(rx(selectOneSQL)).
+	mock.ExpectQuery(selectOneSQL).
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(mainRow)
 
-	mock.ExpectQuery(rx(`
-		SELECT COUNT(*) FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL
-	`)).
+	mock.ExpectQuery(countChildrenSQL).
 		WithArgs("map_dummy").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 
-	mock.ExpectQuery(rx(`
-		SELECT id, COALESCE(name, ''), has_floors, floor_count
-		FROM maps
-		WHERE parent_map_id = ? AND deleted_at IS NULL
-		ORDER BY name
-	`)).
+	mock.ExpectQuery(childrenListSQL).
 		WithArgs("map_dummy").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "has_floors", "floor_count"}))
 
@@ -244,7 +221,7 @@ func TestMapHandler_Create_WithParent_OK(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var resp handlers.MapResponse
+	var resp repository.MapResponse
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 	if resp.ParentMapID == nil || *resp.ParentMapID != "parent_1" {
 		t.Fatalf("expected parent_1, got %+v", resp.ParentMapID)
@@ -274,21 +251,24 @@ func TestMapHandler_Create_InsertError(t *testing.T) {
 	e, mock, cleanup := setupEchoWithMock(t)
 	defer cleanup()
 
-	// Insert（CreateEmpty(nil)）がエラー（8カラム版）
-	mock.ExpectExec(rx(`
-		INSERT INTO maps (
-			id, name, image_data, natural_width, natural_height, parent_map_id, created_at, modified_at
-		) VALUES (?,?,?,?,?,?,?,?)
-	`)).
+	// トランザクション開始
+	mock.ExpectBegin()
+
+	// Insert（CreateEmpty(nil)）がエラー（10カラム版）
+	mock.ExpectExec(insertEmptyMapSQL).
 		WithArgs(
 			sqlmock.AnyArg(),
 			"",  // name
 			nil, // image_data (NULL)
 			0, 0,
 			nil,
+			false, 0,
 			sqlmock.AnyArg(), sqlmock.AnyArg(),
 		).
 		WillReturnError(assertErr("insert failed"))
+
+	// ロールバック
+	mock.ExpectRollback()
 
 	req := httptest.NewRequest(http.MethodPost, "/maps", bytes.NewReader([]byte(`{}`)))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
@@ -310,7 +290,7 @@ func TestMapHandler_Index_OK(t *testing.T) {
 
 	now := time.Now().UTC()
 
-	// 1) 親一覧（2件） ※ image_data は文字列（base64）を想定
+	// 1) 親一覧（2件）
 	parentCols := []string{
 		"id", "name", "image_data", "natural_width", "natural_height",
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
@@ -319,17 +299,11 @@ func TestMapHandler_Index_OK(t *testing.T) {
 		AddRow("p1", "Campus A", "IMG_A", 4096, 3072, nil, true, 3, now, now, nil).
 		AddRow("p2", "Campus B", "IMG_B", 2048, 1536, nil, false, 0, now.Add(-time.Minute), now.Add(-time.Minute), nil)
 
-	mock.ExpectQuery(rx(selectParentsSQL)).
+	mock.ExpectQuery(selectParentsSQL).
 		WillReturnRows(parentRows)
 
 	// 2) 子件数の集約
-	mock.ExpectQuery(rx(`
-		SELECT parent_map_id, COUNT(*)
-		FROM maps
-		WHERE deleted_at IS NULL
-		  AND parent_map_id IN (?,?)
-		GROUP BY parent_map_id
-	`)).
+	mock.ExpectQuery(indexCountByParentsSQL).
 		WithArgs("p1", "p2").
 		WillReturnRows(
 			sqlmock.NewRows([]string{"parent_map_id", "count"}).
@@ -337,20 +311,14 @@ func TestMapHandler_Index_OK(t *testing.T) {
 				AddRow("p2", 1),
 		)
 
-	// 3) 子の軽量一覧（COALESCE(name,'')）
+	// 3) 子の軽量一覧
 	childCols := []string{"id", "name", "has_floors", "floor_count", "parent_map_id"}
 	childRows := sqlmock.NewRows(childCols).
 		AddRow("c11", "1F", false, 0, "p1").
 		AddRow("c12", "2F", false, 0, "p1").
 		AddRow("c21", "展示エリア", false, 0, "p2")
 
-	mock.ExpectQuery(rx(`
-		SELECT id, COALESCE(name, ''), has_floors, floor_count, parent_map_id
-		FROM maps
-		WHERE deleted_at IS NULL
-		  AND parent_map_id IN (?,?)
-		ORDER BY name ASC
-	`)).
+	mock.ExpectQuery(indexChildrenByParentsSQL).
 		WithArgs("p1", "p2").
 		WillReturnRows(childRows)
 
@@ -366,7 +334,7 @@ func TestMapHandler_Index_OK(t *testing.T) {
 	}
 
 	var list struct {
-		Items []handlers.MapResponse `json:"items"`
+		Items []repository.MapResponse `json:"items"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
 		t.Fatalf("json unmarshal error: %v, body=%s", err, rec.Body.String())
@@ -393,7 +361,7 @@ func TestMapHandler_Index_SQL_Error(t *testing.T) {
 	e, mock, cleanup := setupEchoWithMock(t)
 	defer cleanup()
 
-	mock.ExpectQuery(rx(selectParentsSQL)).
+	mock.ExpectQuery(selectParentsSQL).
 		WillReturnError(assertErr("parent select failed"))
 
 	req := httptest.NewRequest(http.MethodGet, "/maps/index", nil)
@@ -415,7 +383,7 @@ func TestMapHandler_Show_OK(t *testing.T) {
 	id := "map_123"
 	now := time.Now().UTC()
 
-	// 1) 本体（image_data は文字列）
+	// 1) 本体
 	mainCols := []string{
 		"id", "name", "image_data", "natural_width", "natural_height",
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
@@ -424,28 +392,21 @@ func TestMapHandler_Show_OK(t *testing.T) {
 		id, "キャンパスマップ2025", "IMG", 4096, 3072,
 		nil, true, 3, now, now, nil,
 	)
-	mock.ExpectQuery(rx(selectOneSQL)).
+	mock.ExpectQuery(selectOneSQL).
 		WithArgs(id).
 		WillReturnRows(mainRow)
 
 	// 2) 子件数
-	mock.ExpectQuery(rx(`
-		SELECT COUNT(*) FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL
-	`)).
+	mock.ExpectQuery(countChildrenSQL).
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
 
-	// 3) 子一覧（順不同→昇順検証）
+	// 3) 子一覧（順不同→昇順検証はハンドラ内で行う）
 	childCols := []string{"id", "name", "has_floors", "floor_count"}
 	childRows := sqlmock.NewRows(childCols).
 		AddRow("map_b", "B2F", false, 0).
 		AddRow("map_a", "1F", false, 0)
-	mock.ExpectQuery(rx(`
-		SELECT id, COALESCE(name, ''), has_floors, floor_count
-		FROM maps
-		WHERE parent_map_id = ? AND deleted_at IS NULL
-		ORDER BY name
-	`)).
+	mock.ExpectQuery(childrenListSQL).
 		WithArgs(id).
 		WillReturnRows(childRows)
 
@@ -460,7 +421,7 @@ func TestMapHandler_Show_OK(t *testing.T) {
 		t.Fatalf("ETag header must be set")
 	}
 
-	var resp handlers.MapResponse
+	var resp repository.MapResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("json unmarshal error: %v, body=%s", err, rec.Body.String())
 	}
@@ -488,7 +449,7 @@ func TestMapHandler_Show_NotFound(t *testing.T) {
 		"id", "name", "image_data", "natural_width", "natural_height",
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
 	}
-	mock.ExpectQuery(rx(selectOneSQL)).
+	mock.ExpectQuery(selectOneSQL).
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows(mainCols))
 
@@ -509,7 +470,7 @@ func TestMapHandler_Show_QueryError(t *testing.T) {
 	defer cleanup()
 
 	id := "map_123"
-	mock.ExpectQuery(rx(selectOneSQL)).
+	mock.ExpectQuery(selectOneSQL).
 		WithArgs(id).
 		WillReturnError(assertErr("select failed"))
 
@@ -541,24 +502,17 @@ func TestMapHandler_Show_NoChildren(t *testing.T) {
 		id, "Empty Child Map", "IMG", 1024, 768,
 		nil, false, 0, now, now, nil,
 	)
-	mock.ExpectQuery(rx(selectOneSQL)).
+	mock.ExpectQuery(selectOneSQL).
 		WithArgs(id).
 		WillReturnRows(mainRow)
 
 	// 子件数=0
-	mock.ExpectQuery(rx(`
-		SELECT COUNT(*) FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL
-	`)).
+	mock.ExpectQuery(countChildrenSQL).
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 
-	// 子一覧=0（COALESCE(name,'')）
-	mock.ExpectQuery(rx(`
-		SELECT id, COALESCE(name, ''), has_floors, floor_count
-		FROM maps
-		WHERE parent_map_id = ? AND deleted_at IS NULL
-		ORDER BY name
-	`)).
+	// 子一覧=0
+	mock.ExpectQuery(childrenListSQL).
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "has_floors", "floor_count"}))
 
@@ -569,7 +523,7 @@ func TestMapHandler_Show_NoChildren(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var resp handlers.MapResponse
+	var resp repository.MapResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("json unmarshal error: %v, body=%s", err, rec.Body.String())
 	}
@@ -602,16 +556,12 @@ func TestMapHandler_Update_OK(t *testing.T) {
 		id, "Old Name", "OLD", 1024, 768,
 		nil, false, 0, now.Add(-time.Hour), now.Add(-time.Hour), nil,
 	)
-	mock.ExpectQuery(rx(selectOneSQL)).
+	mock.ExpectQuery(selectOneSQL).
 		WithArgs(id).
 		WillReturnRows(before)
 
 	// 2) UPDATE（floors系は含めない）
-	mock.ExpectExec(rx(`
-		UPDATE maps
-		SET name = ?, natural_width = ?, parent_map_id = ?, modified_at = ?
-		WHERE id = ? AND deleted_at IS NULL
-	`)).
+	mock.ExpectExec("UPDATE maps SET name = ?, natural_width = ?, parent_map_id = ?, modified_at = ? WHERE id = ? AND deleted_at IS NULL").
 		WithArgs("New Campus", 2048, "parent_1", sqlmock.AnyArg(), id).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -620,22 +570,15 @@ func TestMapHandler_Update_OK(t *testing.T) {
 		id, "New Campus", "OLD", 2048, 768,
 		"parent_1", false, 0, now.Add(-time.Hour), now.Add(time.Minute), nil,
 	)
-	mock.ExpectQuery(rx(selectOneSQL)).
+	mock.ExpectQuery(selectOneSQL).
 		WithArgs(id).
 		WillReturnRows(after)
 
 	// 子件数/一覧 = 0
-	mock.ExpectQuery(rx(`
-		SELECT COUNT(*) FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL
-	`)).
+	mock.ExpectQuery(countChildrenSQL).
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-	mock.ExpectQuery(rx(`
-		SELECT id, COALESCE(name, ''), has_floors, floor_count
-		FROM maps
-		WHERE parent_map_id = ? AND deleted_at IS NULL
-		ORDER BY name
-	`)).
+	mock.ExpectQuery(childrenListSQL).
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "has_floors", "floor_count"}))
 
@@ -658,7 +601,7 @@ func TestMapHandler_Update_OK(t *testing.T) {
 	if etag := rec.Header().Get("ETag"); etag == "" {
 		t.Fatalf("ETag header must be set")
 	}
-	var resp handlers.MapResponse
+	var resp repository.MapResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("json error: %v body=%s", err, rec.Body.String())
 	}
@@ -689,15 +632,11 @@ func TestMapHandler_Update_ClearParentToNULL_OK(t *testing.T) {
 		id, "Bldg", "IMG", 3000, 2000,
 		"parent_old", true, 5, now.Add(-time.Hour), now.Add(-time.Hour), nil,
 	)
-	mock.ExpectQuery(rx(selectOneSQL)).
+	mock.ExpectQuery(selectOneSQL).
 		WithArgs(id).WillReturnRows(before)
 
 	// UPDATE: 親NULL のみ
-	mock.ExpectExec(rx(`
-		UPDATE maps
-		SET parent_map_id = NULL, modified_at = ?
-		WHERE id = ? AND deleted_at IS NULL
-	`)).
+	mock.ExpectExec("UPDATE maps SET parent_map_id = NULL, modified_at = ? WHERE id = ? AND deleted_at IS NULL").
 		WithArgs(sqlmock.AnyArg(), id).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -706,19 +645,12 @@ func TestMapHandler_Update_ClearParentToNULL_OK(t *testing.T) {
 		id, "Bldg", "IMG", 3000, 2000,
 		nil, true, 5, now.Add(-time.Hour), now.Add(time.Minute), nil,
 	)
-	mock.ExpectQuery(rx(selectOneSQL)).
+	mock.ExpectQuery(selectOneSQL).
 		WithArgs(id).WillReturnRows(after)
 
-	mock.ExpectQuery(rx(`
-		SELECT COUNT(*) FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL
-	`)).
+	mock.ExpectQuery(countChildrenSQL).
 		WithArgs(id).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-	mock.ExpectQuery(rx(`
-		SELECT id, COALESCE(name, ''), has_floors, floor_count
-		FROM maps
-		WHERE parent_map_id = ? AND deleted_at IS NULL
-		ORDER BY name
-	`)).
+	mock.ExpectQuery(childrenListSQL).
 		WithArgs(id).WillReturnRows(sqlmock.NewRows([]string{"id", "name", "has_floors", "floor_count"}))
 
 	// PATCH: parentMapId = null
@@ -732,7 +664,7 @@ func TestMapHandler_Update_ClearParentToNULL_OK(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var resp handlers.MapResponse
+	var resp repository.MapResponse
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 	if resp.ParentMapID != nil {
 		t.Fatalf("expected parent_map_id NULL, got %+v", resp.ParentMapID)
@@ -757,7 +689,7 @@ func TestMapHandler_Update_NotFound(t *testing.T) {
 		"id", "name", "image_data", "natural_width", "natural_height",
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
 	}
-	mock.ExpectQuery(rx(selectOneSQL)).
+	mock.ExpectQuery(selectOneSQL).
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows(mainCols))
 
@@ -789,7 +721,7 @@ func TestMapHandler_Update_ValidationError_EmptyName(t *testing.T) {
 	before := sqlmock.NewRows(mainCols).AddRow(
 		id, "X", "IMG", 100, 100, nil, false, 0, now.Add(-time.Hour), now.Add(-time.Hour), nil,
 	)
-	mock.ExpectQuery(rx(selectOneSQL)).
+	mock.ExpectQuery(selectOneSQL).
 		WithArgs(id).WillReturnRows(before)
 
 	// name に空文字を指定 → リポジトリでバリデーションエラー（UPDATEは発行されない）
@@ -822,15 +754,11 @@ func TestMapHandler_Update_UpdateExecError(t *testing.T) {
 	before := sqlmock.NewRows(mainCols).AddRow(
 		id, "Old", "IMG", 100, 100, nil, false, 0, now.Add(-time.Hour), now.Add(-time.Hour), nil,
 	)
-	mock.ExpectQuery(rx(selectOneSQL)).
+	mock.ExpectQuery(selectOneSQL).
 		WithArgs(id).WillReturnRows(before)
 
 	// UPDATE でエラー
-	mock.ExpectExec(rx(`
-		UPDATE maps
-		SET name = ?, modified_at = ?
-		WHERE id = ? AND deleted_at IS NULL
-	`)).
+	mock.ExpectExec("UPDATE maps SET name = ?, modified_at = ? WHERE id = ? AND deleted_at IS NULL").
 		WithArgs("New", sqlmock.AnyArg(), id).
 		WillReturnError(assertErr("update failed"))
 
@@ -860,48 +788,17 @@ func TestMapHandler_Delete_OK(t *testing.T) {
 	mock.ExpectBegin()
 
 	// 存在確認
-	mock.ExpectQuery(rx(`
-		SELECT COUNT(*)
-		FROM maps
-		WHERE id = ? AND deleted_at IS NULL
-		LIMIT 1
-	`)).
+	mock.ExpectQuery(selectExistForDeleteSQL).
 		WithArgs(rootID).
 		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(1))
 
 	// pins 削除
-	mock.ExpectExec(rx(`
-		WITH RECURSIVE submaps AS (
-			SELECT id
-			FROM maps
-			WHERE id = ? AND deleted_at IS NULL
-			UNION ALL
-			SELECT m.id
-			FROM maps m
-			JOIN submaps s ON m.parent_map_id = s.id
-			WHERE m.deleted_at IS NULL
-		)
-		DELETE p FROM pins p
-		JOIN submaps sm ON p.map_id = sm.id
-	`)).
+	mock.ExpectExec(deletePinsCascadeSQL).
 		WithArgs(rootID).
 		WillReturnResult(sqlmock.NewResult(0, 4))
 
 	// maps 削除
-	mock.ExpectExec(rx(`
-		WITH RECURSIVE submaps AS (
-			SELECT id
-			FROM maps
-			WHERE id = ? AND deleted_at IS NULL
-			UNION ALL
-			SELECT m.id
-			FROM maps m
-			JOIN submaps s ON m.parent_map_id = s.id
-			WHERE m.deleted_at IS NULL
-		)
-		DELETE m FROM maps m
-		JOIN submaps sm ON m.id = sm.id
-	`)).
+	mock.ExpectExec(deleteMapsCascadeSQL).
 		WithArgs(rootID).
 		WillReturnResult(sqlmock.NewResult(0, 3))
 
@@ -927,12 +824,7 @@ func TestMapHandler_Delete_NotFound(t *testing.T) {
 	missing := "map_missing"
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(rx(`
-		SELECT COUNT(*)
-		FROM maps
-		WHERE id = ? AND deleted_at IS NULL
-		LIMIT 1
-	`)).
+	mock.ExpectQuery(selectExistForDeleteSQL).
 		WithArgs(missing).
 		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(0))
 	mock.ExpectRollback()
@@ -956,29 +848,11 @@ func TestMapHandler_Delete_PinsDeleteError(t *testing.T) {
 	id := "map_err_pins"
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(rx(`
-		SELECT COUNT(*)
-		FROM maps
-		WHERE id = ? AND deleted_at IS NULL
-		LIMIT 1
-	`)).
+	mock.ExpectQuery(selectExistForDeleteSQL).
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(1))
 
-	mock.ExpectExec(rx(`
-		WITH RECURSIVE submaps AS (
-			SELECT id
-			FROM maps
-			WHERE id = ? AND deleted_at IS NULL
-			UNION ALL
-			SELECT m.id
-			FROM maps m
-			JOIN submaps s ON m.parent_map_id = s.id
-			WHERE m.deleted_at IS NULL
-		)
-		DELETE p FROM pins p
-		JOIN submaps sm ON p.map_id = sm.id
-	`)).
+	mock.ExpectExec(deletePinsCascadeSQL).
 		WithArgs(id).
 		WillReturnError(assertErr("delete pins failed"))
 
@@ -1004,46 +878,15 @@ func TestMapHandler_Delete_CommitError(t *testing.T) {
 	id := "map_commit_err"
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(rx(`
-		SELECT COUNT(*)
-		FROM maps
-		WHERE id = ? AND deleted_at IS NULL
-		LIMIT 1
-	`)).
+	mock.ExpectQuery(selectExistForDeleteSQL).
 		WithArgs(id).
 		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(1))
 
-	mock.ExpectExec(rx(`
-		WITH RECURSIVE submaps AS (
-			SELECT id
-			FROM maps
-			WHERE id = ? AND deleted_at IS NULL
-			UNION ALL
-			SELECT m.id
-			FROM maps m
-			JOIN submaps s ON m.parent_map_id = s.id
-			WHERE m.deleted_at IS NULL
-		)
-		DELETE p FROM pins p
-		JOIN submaps sm ON p.map_id = sm.id
-	`)).
+	mock.ExpectExec(deletePinsCascadeSQL).
 		WithArgs(id).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	mock.ExpectExec(rx(`
-		WITH RECURSIVE submaps AS (
-			SELECT id
-			FROM maps
-			WHERE id = ? AND deleted_at IS NULL
-			UNION ALL
-			SELECT m.id
-			FROM maps m
-			JOIN submaps s ON m.parent_map_id = s.id
-			WHERE m.deleted_at IS NULL
-		)
-		DELETE m FROM maps m
-		JOIN submaps sm ON m.id = sm.id
-	`)).
+	mock.ExpectExec(deleteMapsCascadeSQL).
 		WithArgs(id).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 

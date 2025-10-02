@@ -1,109 +1,103 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ========= 共通設定 =========
+# ========= 共通設定（環境変数で上書き可） =========
 BASE="${BASE:-http://localhost:8080}"
-UA="${UA:-curl-test/1.0}"
+UA="${UA:-curl-test/1.2}"
+ROOT_NAME="${ROOT_NAME:-2025 NUTFES}"   # 既存ルートを名前で優先選択
+PATCH_ROOT="${PATCH_ROOT:-0}"           # 1 にすると根マップの自然サイズを最小限PATCH
+B64_IMG="${B64_IMG:-iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAAWgmWQ0AAAAASUVORK5CYII=}"
 
-# 画像のダミー base64（必要に応じて差し替え）
-B64_IMG='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAAWgmWQ0AAAAASUVORK5CYII='
+need() { command -v "$1" >/dev/null 2>&1 || { echo "ERROR: '$1' not found"; exit 1; }; }
+need jq
+need awk
+need sed
 
-curlj() {
-  curl -sS -A "$UA" -H 'Accept: application/json' "$@"
-}
+curlj() { curl -sS -A "$UA" -H 'Accept: application/json' "$@"; }
 
+echo "BASE=$BASE"
+
+# 1) インデックス取得
+echo
 echo "== 1) 親なしマップ一覧（GET /maps/index） =="
-curlj -X GET "$BASE/maps/index" | jq
+INDEX_JSON="$(curlj -X GET "$BASE/maps/index")"
+echo "$INDEX_JSON" | jq
 
+# 2) 既存のルートIDを決定（ROOT_NAME があれば優先、なければ親なしの先頭）
 echo
-echo "== 2) 既存の親マップ ID を取得（シード済み想定） =="
-# 名前（例: 2025 NUTFES）で探し、無ければ最初の親マップを使う。どちらも無ければエラー終了。
-MAP_ID="$(
-  curlj -X GET "$BASE/maps/index" \
-  | jq -er '
+echo "== 2) 既存のルートIDを決定 =="
+ROOT_ID="$(
+  echo "$INDEX_JSON" \
+  | jq -er --arg NAME "$ROOT_NAME" '
       .items
-      | map(select(.parentMapId == null))          # 親なし = ルート
-      | ( map(select(.name == "2025 NUTFES"))[0].id
-          // (.[0].id)
-        )'
+      | map(select(.parentMapId == null))
+      | ( (map(select(.name == $NAME))[0].id) // (.[0].id) )
+    '
 )"
-echo "MAP_ID=$MAP_ID"
+echo "ROOT_ID=$ROOT_ID"
 
+# 3) ルートの詳細表示（内容は変更しない）
 echo
-echo "== 3) 親マップの詳細（GET /maps/:id） =="
-curlj -X GET "$BASE/maps/$MAP_ID" | jq
+echo "== 3) ルート詳細（GET /maps/:id） =="
+curlj -X GET "$BASE/maps/$ROOT_ID" | jq
 
-echo
-echo "== 4) 親マップの内容を投入（PATCH /maps/:id）"
-echo "   - 編集可能: name, imageData(base64), naturalWidth, naturalHeight, parentMapId"
-echo "   - hasFloors/floorCount はサーバ専管（送らない）"
-curlj -X PATCH "$BASE/maps/$MAP_ID" \
-  -H 'Content-Type: application/json' \
-  -d @- <<JSON | jq
-{
-  "name": "2025 技大祭メインマップ",
-  "imageData": "$B64_IMG",
-  "naturalWidth": 4096,
-  "naturalHeight": 3072
-}
-JSON
-
-echo
-echo "== 5) 子マップの作成（親にぶら下げる空マップを作成 → PATCHで内容投入） =="
-CHILD_MAP_ID="$(
-  curlj -X POST "$BASE/maps" \
+# 4) （任意）画像や自然サイズを最小限で PATCH したい場合はここで実施
+if [[ "$PATCH_ROOT" == "1" ]]; then
+  echo
+  echo "== 4) ルートを最小限 PATCH（任意） =="
+  curlj -X PATCH "$BASE/maps/$ROOT_ID" \
     -H 'Content-Type: application/json' \
-    -d @- <<JSON \
-  | jq -er '.id'
-{ "parentMapId": "$MAP_ID" }
+    -d @- <<JSON | jq
+{ "naturalWidth": 2048, "naturalHeight": 1536, "imageData": "$B64_IMG" }
 JSON
-)"
-echo "CHILD_MAP_ID=$CHILD_MAP_ID"
+fi
 
+# 5) フロアを2つ追加（POST /maps/:mapId/floors x2）
 echo
-echo "== 5-1) 子マップへ内容投入（PATCH /maps/:id） =="
-curlj -X PATCH "$BASE/maps/$CHILD_MAP_ID" \
-  -H 'Content-Type: application/json' \
-  -d @- <<JSON | jq
-{
-  "name": "本館 1F",
-  "imageData": "$B64_IMG",
-  "naturalWidth": 2048,
-  "naturalHeight": 1536
-}
-JSON
+echo "== 5) フロアを2つ追加（POST /maps/:mapId/floors x2） =="
+F1_ID="$(curlj -X POST "$BASE/maps/$ROOT_ID/floors" | jq -er '.id')"
+echo "F1_ID=$F1_ID"
+F2_ID="$(curlj -X POST "$BASE/maps/$ROOT_ID/floors" | jq -er '.id')"
+echo "F2_ID=$F2_ID"
 
+# 6) フロア一覧（1F..順）
 echo
-echo "== 6) 親の付け替え / 解除（PATCH /maps/:id） =="
-echo "   - 子の親解除（ルートへ移動）"
-curlj -X PATCH "$BASE/maps/$CHILD_MAP_ID" \
-  -H 'Content-Type: application/json' \
-  -d '{"parentMapId": null}' | jq
+echo "== 6) フロア一覧（GET /maps/:mapId/floors） 1F..順 =="
+curlj -X GET "$BASE/maps/$ROOT_ID/floors" | jq
 
-echo "   - 親を再設定（元の親へ戻す）"
-curlj -X PATCH "$BASE/maps/$CHILD_MAP_ID" \
-  -H 'Content-Type: application/json' \
-  -d @- <<JSON | jq
-{ "parentMapId": "$MAP_ID" }
-JSON
-
+# 7) 最上階以外の削除はエラーであることを確認（/floors/1）
 echo
-echo "== 7) 親マップの自然サイズだけ更新（必要時のみ） =="
-curlj -X PATCH "$BASE/maps/$MAP_ID" \
-  -H 'Content-Type: application/json' \
-  -d '{"naturalWidth": 4320, "naturalHeight": 3240}' | jq
+echo "== 7) 最上階以外は削除できないことの確認（DELETE /maps/:id/floors/1） =="
+set +e
+HTTP_CODE="$(curl -sS -A "$UA" -H 'Accept: application/json' -X DELETE "$BASE/maps/$ROOT_ID/floors/1" -i | awk 'NR==1{print $2}')"
+set -e
+echo "HTTP_CODE=$HTTP_CODE  # 400 を想定"
 
+# 8) 最上階（2F）を削除
 echo
-echo "== 8) 親マップ詳細（子メタ含む）確認 =="
-curlj -X GET "$BASE/maps/$MAP_ID" | jq
+echo "== 8) 最上階を削除（DELETE /maps/:id/floors/2） =="
+curl -sS -A "$UA" -H 'Accept: application/json' -X DELETE "$BASE/maps/$ROOT_ID/floors/2" -i
 
+# 9) フロア一覧を再確認
 echo
-echo "== 9) 子マップ削除（配下にピン等あれば再帰で削除） =="
-# ※ シード済みの親は残すため、子のみ削除
-curl -sS -A "$UA" -X DELETE "$BASE/maps/$CHILD_MAP_ID" -i
+echo "== 9) フロア一覧を再確認（GET /maps/:id/floors） =="
+curlj -X GET "$BASE/maps/$ROOT_ID/floors" | jq
 
+# 10) ETag を取得して条件付き取得を試す
 echo
 echo "== 10) 条件付き取得（ETag） =="
 ETAG="$(curl -sS -A "$UA" -i "$BASE/maps/index" | awk -F': ' 'tolower($1)=="etag"{gsub("\r","",$2);print $2;exit}')"
 echo "ETag=$ETAG"
 curl -sS -A "$UA" -H "If-None-Match: $ETAG" "$BASE/maps/index" -i
+
+# 11) 片付け：作成したフロアを個別削除（ルートは削除しない）
+echo
+echo "== 11) 片付け：作成したフロアを個別削除（DELETE /maps/:floorId） =="
+# 2F はすでに削除済みの可能性があるので失敗は無視
+set +e
+curl -sS -A "$UA" -H 'Accept: application/json' -X DELETE "$BASE/maps/$F2_ID" -i >/dev/null
+set -e
+curl -sS -A "$UA" -H 'Accept: application/json' -X DELETE "$BASE/maps/$F1_ID" -i
+
+echo
+echo "== 完了 =="
