@@ -1,17 +1,23 @@
+# services/nutfesmap-api/build/Dockerfile
+
+# ---- Build stage ----
 FROM golang:1.24.5 AS builder
+WORKDIR /src
 
-WORKDIR /app
+# 依存キャッシュ
+COPY services/nutfesmap-api/go.mod services/nutfesmap-api/go.sum ./
+RUN go mod download
 
+# アプリ本体
 COPY services/nutfesmap-api/ .
 
-RUN go mod tidy
+# 静的リンクでビルド（CGO無効）
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags="-s -w" -o /out/server ./cmd/server
 
-RUN go build -o /app/server ./cmd/server
-
-FROM alpine:3.20
-
-COPY --from=builder /app/server /app/server
-
+# ---- Runtime stage ----
+FROM gcr.io/distroless/static-debian12
+WORKDIR /app
+COPY --from=builder /out/server /app/server
 EXPOSE 8080
-
 ENTRYPOINT ["/app/server"]

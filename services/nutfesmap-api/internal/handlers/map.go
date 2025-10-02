@@ -1,48 +1,32 @@
 package handlers
 
 import (
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"errors"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
-	"nutfesmap/internal/model"
 	"nutfesmap/internal/repository"
 )
 
+// ---- Request DTO ----
+
+// POST /maps（空マップ作成）リクエスト
 type MapCreateRequest struct {
-	Name          string  `json:"name"          validate:"required,min=1"`
-	ImageData     string  `json:"imageData"     validate:"required"` // base64
-	NaturalWidth  int     `json:"naturalWidth"  validate:"required,min=1"`
-	NaturalHeight int     `json:"naturalHeight" validate:"required,min=1"`
-	ParentMapID   *string `json:"parentMapId"`
-	HasFloors     bool    `json:"hasFloors"`
-	FloorCount    int     `json:"floorCount"    validate:"min=0"`
+	ParentMapID *string `json:"parentMapId"`
 }
 
-// Response DTO（外部契約）
-type MapChildRefDTO struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	HasFloors  bool   `json:"hasFloors"`
-	FloorCount int    `json:"floorCount"`
-}
-
-type MapResponse struct {
-	ID            string           `json:"id"`
-	Name          string           `json:"name"`
-	ImageData     string           `json:"imageData"`
-	NaturalWidth  int              `json:"naturalWidth"`
-	NaturalHeight int              `json:"naturalHeight"`
-	ParentMapID   *string          `json:"parentMapId,omitempty"`
-	HasFloors     bool             `json:"hasFloors"`
-	FloorCount    int              `json:"floorCount"`
-	ChildrenCount int              `json:"childrenCount"`
-	Children      []MapChildRefDTO `json:"children"`
-	CreatedAt     time.Time        `json:"createdAt"`
-	ModifiedAt    time.Time        `json:"modifiedAt"`
+// レスポンス全体ラッパ（/maps/index）
+type MapsIndexResponse struct {
+	Items []repository.MapResponse `json:"items"`
 }
 
 type MapHandler struct {
@@ -54,85 +38,319 @@ func NewMapHandler(r *repository.MapRepository) *MapHandler {
 }
 
 // POST /maps
+// 空のマップのみ作成。name / imageData / natural* / floors は受け付けない。
 func (h *MapHandler) Create(c echo.Context) error {
 	var req MapCreateRequest
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
 	}
-	if err := c.Validate(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
-	}
 
-	// 追加の軽い検証（ドメイン制約）
-	if strings.TrimSpace(req.ImageData) == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "imageData is required")
-	}
-	if req.HasFloors && req.FloorCount < 1 {
-		return echo.NewHTTPError(http.StatusBadRequest, "floorCount must be >= 1 when hasFloors=true")
-	}
-
-	newID := "map_" + uuid.NewString()
-	m := &model.Map{
-		ID:            newID,
-		Name:          req.Name,
-		ImageData:     req.ImageData,
-		NaturalWidth:  req.NaturalWidth,
-		NaturalHeight: req.NaturalHeight,
-		ParentMapID:   req.ParentMapID,
-		HasFloors:     req.HasFloors,
-		FloorCount:    req.FloorCount,
-	}
-
+	newID := uuid.NewString()
 	ctx := c.Request().Context()
-	if err := h.Repo.Insert(ctx, m); err != nil {
+
+	// 親なし=ルート作成／親あり=フロア追加（親の has_floors/floor_count も更新）
+	if err := h.Repo.CreateByRequest(ctx, newID, &repository.MapCreateRequest{
+		ParentMapID: req.ParentMapID,
+	}); err != nil {
 		return err
 	}
 
-	agg, err := h.Repo.FindAggregate(ctx, newID)
+	// 作成直後の状態を取得
+	res, err := h.Repo.FindMapResponseByID(ctx, newID)
+	if err != nil {
+		return err
+	}
+	if res == nil {
+		// 直後の再読込に失敗した場合のフォールバック
+		now := time.Now().UTC()
+		res = &repository.MapResponse{
+			ID:            newID,
+			Name:          "",
+			ImageData:     "",
+			NaturalWidth:  0,
+			NaturalHeight: 0,
+			ParentMapID:   req.ParentMapID,
+			HasFloors:     false,
+			FloorCount:    0,
+			ChildrenCount: 0,
+			Children:      []repository.MapChildRefDTO{},
+			CreatedAt:     now,
+			ModifiedAt:    now,
+		}
+	}
+
+	// ETag: ID + ModifiedAt
+	hash := sha256.New()
+	hash.Write([]byte(res.ID))
+	hash.Write([]byte(res.ModifiedAt.UTC().Format(time.RFC3339Nano)))
+	etag := `W/"` + hex.EncodeToString(hash.Sum(nil)) + `"`
+	c.Response().Header().Set("ETag", etag)
+
+	return c.JSON(http.StatusCreated, res)
+}
+
+// GET /maps/index
+func (h *MapHandler) Index(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	ags, err := h.Repo.FindIndexAggregates(ctx)
 	if err != nil {
 		return err
 	}
 
-	// 正常系：Aggregate からレスポンスDTOを組み立て
-	if agg != nil && agg.Base != nil {
-		children := make([]MapChildRefDTO, 0, len(agg.Children))
-		for _, ch := range agg.Children {
-			children = append(children, MapChildRefDTO{
+	items := make([]repository.MapResponse, 0, len(ags))
+	hash := sha256.New()
+
+	for _, ag := range ags {
+		// 子を Name 昇順で安定化
+		sort.Slice(ag.Children, func(i, j int) bool {
+			return ag.Children[i].Name < ag.Children[j].Name
+		})
+
+		children := make([]repository.MapChildRefDTO, 0, len(ag.Children))
+		for _, ch := range ag.Children {
+			children = append(children, repository.MapChildRefDTO{
 				ID:         ch.ID,
 				Name:       ch.Name,
 				HasFloors:  ch.HasFloors,
 				FloorCount: ch.FloorCount,
 			})
 		}
-		res := MapResponse{
-			ID:            agg.Base.ID,
-			Name:          agg.Base.Name,
-			ImageData:     agg.Base.ImageData,
-			NaturalWidth:  agg.Base.NaturalWidth,
-			NaturalHeight: agg.Base.NaturalHeight,
-			ParentMapID:   agg.Base.ParentMapID,
-			HasFloors:     agg.Base.HasFloors,
-			FloorCount:    agg.Base.FloorCount,
-			ChildrenCount: agg.ChildrenCount,
+
+		base := ag.Base
+		items = append(items, repository.MapResponse{
+			ID:            base.ID,
+			Name:          base.Name,
+			ImageData:     base.ImageData, // LONGTEXT(base64)
+			NaturalWidth:  base.NaturalWidth,
+			NaturalHeight: base.NaturalHeight,
+			ParentMapID:   base.ParentMapID,
+			HasFloors:     base.HasFloors,
+			FloorCount:    base.FloorCount,
+			ChildrenCount: ag.ChildrenCount,
 			Children:      children,
-			CreatedAt:     agg.Base.CreatedAt,
-			ModifiedAt:    agg.Base.ModifiedAt,
-		}
-		return c.JSON(http.StatusCreated, res)
+			CreatedAt:     base.CreatedAt,
+			ModifiedAt:    base.ModifiedAt,
+		})
+
+		// ETag 材料（ID+ModifiedAt）
+		hash.Write([]byte(base.ID))
+		hash.Write([]byte(base.ModifiedAt.UTC().Format(time.RFC3339Nano)))
 	}
 
-	// まれに直後の再読込に失敗した場合のフォールバック
-	fallback := MapResponse{
-		ID:            m.ID,
-		Name:          m.Name,
-		ImageData:     m.ImageData,
-		NaturalWidth:  m.NaturalWidth,
-		NaturalHeight: m.NaturalHeight,
-		ParentMapID:   m.ParentMapID,
-		HasFloors:     m.HasFloors,
-		FloorCount:    m.FloorCount,
-		ChildrenCount: 0,
-		Children:      []MapChildRefDTO{},
+	etag := `W/"` + hex.EncodeToString(hash.Sum(nil)) + `"`
+	c.Response().Header().Set("ETag", etag)
+
+	return c.JSON(http.StatusOK, MapsIndexResponse{Items: items})
+}
+
+// GET /maps/:mapId （地図メタ取得）
+func (h *MapHandler) Show(c echo.Context) error {
+	mapID := c.Param("mapId")
+	if mapID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "mapId is required")
 	}
-	return c.JSON(http.StatusCreated, fallback)
+
+	ctx := c.Request().Context()
+	res, err := h.Repo.FindMapResponseByID(ctx, mapID)
+	if err != nil {
+		return err
+	}
+	if res == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "map not found")
+	}
+
+	// 子は名前昇順で安定化
+	sort.Slice(res.Children, func(i, j int) bool {
+		return res.Children[i].Name < res.Children[j].Name
+	})
+
+	// 単体ETag: ID + ModifiedAt
+	hash := sha256.New()
+	hash.Write([]byte(res.ID))
+	hash.Write([]byte(res.ModifiedAt.UTC().Format(time.RFC3339Nano)))
+	etag := `W/"` + hex.EncodeToString(hash.Sum(nil)) + `"`
+	c.Response().Header().Set("ETag", etag)
+
+	return c.JSON(http.StatusOK, res)
+}
+
+// PATCH /maps/:mapId
+func (h *MapHandler) Update(c echo.Context) error {
+	mapID := c.Param("mapId")
+	if mapID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "mapId is required")
+	}
+
+	// 受け取り: name / imageData / naturalWidth / naturalHeight / parentMapId のみ
+	var req repository.MapUpdateRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid JSON body")
+	}
+
+	ctx := c.Request().Context()
+	updated, err := h.Repo.UpdatePartial(ctx, mapID, &req)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return echo.NewHTTPError(http.StatusNotFound, "map not found")
+		}
+		// ドメイン検証エラーなどは 400 に寄せる（UpdatePartial は検証時に error を返す）
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	if updated == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "map not found")
+	}
+
+	// 子は名前昇順で安定化
+	sort.Slice(updated.Children, func(i, j int) bool {
+		return updated.Children[i].Name < updated.Children[j].Name
+	})
+
+	// ETag: ID + ModifiedAt
+	hash := sha256.New()
+	hash.Write([]byte(updated.ID))
+	hash.Write([]byte(updated.ModifiedAt.UTC().Format(time.RFC3339Nano)))
+	etag := `W/"` + hex.EncodeToString(hash.Sum(nil)) + `"`
+	c.Response().Header().Set("ETag", etag)
+
+	return c.JSON(http.StatusOK, updated)
+}
+
+// DELETE /maps/:mapId
+func (h *MapHandler) Delete(c echo.Context) error {
+	mapID := c.Param("mapId")
+	if mapID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "mapId is required")
+	}
+
+	ctx := c.Request().Context()
+	_, _, err := h.Repo.DeleteCascade(ctx, mapID)
+	if err != nil {
+		// 対象なし
+		if errors.Is(err, sql.ErrNoRows) {
+			return echo.NewHTTPError(http.StatusNotFound, "map not found")
+		}
+		// それ以外は内部エラーとして扱う（Echo 側で 500 にマップ）
+		return err
+	}
+
+	// 本体・子マップ・ピンを再帰的に削除済み
+	return c.NoContent(http.StatusNoContent)
+}
+
+// フロア専用作成: {mapId} をフロアスタックのルート（通常はエリア）として、空のフロアを1件追加。
+// 親エリアの has_floors=true / floor_count++ を更新します。
+func (h *MapHandler) CreateFloor(c echo.Context) error {
+	mapID := c.Param("mapId")
+	if mapID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "mapId is required")
+	}
+
+	newID := uuid.NewString()
+	ctx := c.Request().Context()
+
+	// 変更点: Repo.CreateEmptyFloorTx を使用（親の集約値を更新）
+	if err := h.Repo.CreateEmptyFloorTx(ctx, newID, mapID); err != nil {
+		// 親（=フロアルート=エリア）なし → 404
+		// Repository 側は "floor root not found: <id>" を返す
+		if strings.Contains(err.Error(), "floor root not found") {
+			return echo.NewHTTPError(http.StatusNotFound, "floor root not found")
+		}
+		return err // その他は 500
+	}
+
+	// 作成したフロアを返却
+	res, err := h.Repo.FindMapResponseByID(ctx, newID)
+	if err != nil {
+		return err
+	}
+	if res == nil {
+		// 直後の再取得に失敗した場合のフォールバック
+		now := time.Now().UTC()
+		res = &repository.MapResponse{
+			ID:            newID,
+			Name:          "",
+			ImageData:     "",
+			NaturalWidth:  0,
+			NaturalHeight: 0,
+			ParentMapID:   &mapID,
+			HasFloors:     false,
+			FloorCount:    0,
+			ChildrenCount: 0,
+			Children:      []repository.MapChildRefDTO{},
+			CreatedAt:     now,
+			ModifiedAt:    now,
+		}
+	}
+
+	// ETag（ID + ModifiedAt）
+	hsh := sha256.New()
+	hsh.Write([]byte(res.ID))
+	hsh.Write([]byte(res.ModifiedAt.UTC().Format(time.RFC3339Nano)))
+	c.Response().Header().Set("ETag", `W/"`+hex.EncodeToString(hsh.Sum(nil))+`"`)
+
+	return c.JSON(http.StatusCreated, res)
+}
+
+// DELETE /maps/:mapId/floors/:floorIndex
+// 最上階のみ削除可能。floorIndex は 1..floor_count で、現状の floor_count と一致したときのみ削除。
+func (h *MapHandler) DeleteTopFloor(c echo.Context) error {
+	mapID := c.Param("mapId")
+	if mapID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "mapId is required")
+	}
+	idxStr := c.Param("floorIndex")
+	idx, err := strconv.Atoi(idxStr)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "floorIndex must be an integer")
+	}
+
+	ctx := c.Request().Context()
+	if err := h.Repo.DeleteTopFloorByIndex(ctx, mapID, idx); err != nil {
+		// NOT FOUND 相当
+		if errors.Is(err, sql.ErrNoRows) {
+			return echo.NewHTTPError(http.StatusNotFound, "map not found")
+		}
+		// ドメイン検証エラー系は 400 に寄せる
+		if strings.Contains(err.Error(), "floorIndex must be") ||
+			strings.Contains(err.Error(), "no floors to delete") ||
+			strings.Contains(err.Error(), "only top floor") {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		// その他は 500
+		return err
+	}
+
+	return c.NoContent(http.StatusNoContent)
+}
+
+// GET /maps/:mapId/floors
+// フロアスタック取得:
+// - {mapId} がエリア    → その直下のフロアを 1F.. 順で返す
+// - {mapId} がフロア    → 親エリア直下の全フロアを返す
+// - {mapId} が Index    → 空のスタック（floorCount=0, items=[]）を返す
+func (h *MapHandler) ListFloors(c echo.Context) error {
+	mapID := c.Param("mapId")
+	if mapID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "mapId is required")
+	}
+
+	ctx := c.Request().Context()
+	fs, err := h.Repo.FindFloorStackByAnyID(ctx, mapID)
+	if err != nil {
+		return err
+	}
+	if fs == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "map not found")
+	}
+
+	// ETag（rootID + 各階 ModifiedAt）
+	hsh := sha256.New()
+	hsh.Write([]byte(fs.RootMapID))
+	for _, it := range fs.Items {
+		hsh.Write([]byte(it.Map.ModifiedAt.UTC().Format(time.RFC3339Nano)))
+	}
+	c.Response().Header().Set("ETag", `W/"`+hex.EncodeToString(hsh.Sum(nil))+`"`)
+
+	return c.JSON(http.StatusOK, fs)
 }

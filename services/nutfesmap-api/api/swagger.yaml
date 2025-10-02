@@ -1,56 +1,60 @@
 openapi: 3.1.0
 info:
   title: "nutfesmap 技大祭マップ API"
-  version: "0.4.0"
+  version: "0.7.1"
   description: |
-    技大祭マップサービスAPI。
+    技大祭マップサービスAPI（Auth / Users / Maps / Floors / Pins）
 
-    ■ 現仕様
-    - 全エンドポイントは認証不要（公開）です。
-    - Auth系エンドポイントは将来利用のため仕様として残していますが、呼び出し時の認証要件はありません。
+    ■ 設計方針（DB優先）
+    - `maps` は **1行=1マップ=一意の `id`（PK）**。
+    - 「同じMAP IDで全階を扱う」は、**root（親）Mapの `id` をグループID** として用い、
+      各階の `parent_map_id` に **rootの `id`** を格納（各階自身の `id` はユニーク）。
+        - 例）root: id=`map_123`、各階は `parent_map_id=map_123` を共有。
+    - ルート（親なし）一覧は `/maps/index`。
+    - 単体の Map は `/maps/{mapId}` で取得・更新。
+    - **フロア（階）スタックの取得は `/maps/{mapId}/floors`**（`mapId` は root でも floor でも可）。
+    - **階の追加は `/maps/{mapId}/floors`（POST）**、**階の削除は `/maps/{mapId}/floors/{floorIndex}`（DELETE）**。
+    - ETag は `ID` と `ModifiedAt`（または階ごとの `ModifiedAt`）から生成し、主要レスポンスに付与。
 
 servers:
   - url: "http://localhost:8080"
     description: "ローカル開発用サーバ"
   - url: "http://localhost:8080/api"
-    description: "/api プレフィックスを付ける構成の場合（必要に応じてパスも合わせる）"
+    description: "/api プレフィックス構成"
 
 tags:
   - name: "Auth"
-    description: "認証関連API（現在は未使用だが仕様は保持）"
+    description: "認証関連API"
   - name: "Users"
-    description: "ユーザー関連API"
+    description: "ユーザー管理API"
   - name: "Maps"
-    description: "地図（背景画像メタ／階層: campus→area→floor）関連API"
+    description: "地図メタ／階（フロア）スタック操作"
   - name: "Pins"
-    description: "地図上のピン（企画・エリア選択など）関連API"
+    description: "ピン（正規化座標）"
 
 paths:
+  # ───────────── Auth ─────────────
   /auth/login:
     post:
       tags: ["Auth"]
       summary: "ユーザーログイン"
       description: |
-        ユーザーを認証し、アクセスJWTを返却。リフレッシュトークンは HttpOnly Cookie `rt` に設定されます。
-        現仕様では呼び出し時の認証・CSRFチェックは不要。
+        ユーザーを認証し、アクセスJWTを返却。リフレッシュトークンは HttpOnly Cookie `rt` に設定。
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: "#/components/schemas/LoginRequest"
+            schema: { $ref: "#/components/schemas/LoginRequest" }
       responses:
         "200":
           description: "認証成功"
           headers:
             Set-Cookie:
               description: "HttpOnly refresh token cookie (rt)"
-              schema:
-                type: string
+              schema: { type: string }
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/TokenResponse"
+              schema: { $ref: "#/components/schemas/TokenResponse" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/UnauthorizedError" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -60,21 +64,17 @@ paths:
     post:
       tags: ["Auth"]
       summary: "アクセストークン再発行"
-      description: |
-        有効なリフレッシュトークンCookieを用いてアクセストークンを再発行し、リフレッシュトークンもローテーションします。
-        現仕様では呼び出し時の認証・CSRFチェックは不要。
+      description: "有効なRT Cookieを用いてATを再発行し、RTもローテーションする。"
       responses:
         "200":
           description: "再発行成功"
           headers:
             Set-Cookie:
               description: "Rotated HttpOnly refresh token cookie (rt)"
-              schema:
-                type: string
+              schema: { type: string }
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/TokenResponse"
+              schema: { $ref: "#/components/schemas/TokenResponse" }
         "401": { $ref: "#/components/responses/UnauthorizedError" }
         "500": { $ref: "#/components/responses/ServerError" }
 
@@ -82,51 +82,46 @@ paths:
     post:
       tags: ["Auth"]
       summary: "ログアウト"
-      description: |
-        リフレッシュトークンを無効化し、Cookieを削除します。
-        現仕様では呼び出し時の認証・CSRFチェックは不要。
+      description: "RTを無効化し、Cookieを削除する。"
       responses:
         "204":
           description: "ログアウト成功（No Content）"
           headers:
             Set-Cookie:
               description: "クリアされたリフレッシュトークンCookie"
-              schema:
-                type: string
+              schema: { type: string }
         "500": { $ref: "#/components/responses/ServerError" }
 
   /auth/csrf:
     get:
       tags: ["Auth"]
       summary: "CSRFトークン取得"
-      description: "CSRFトークンを返却（現仕様では必須ではありません）。"
       responses:
         "200":
-          description: "取得成功"
+          description: "取得成功（CSRF有効時）"
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/CsrfResponse"
+              schema: { $ref: "#/components/schemas/CsrfResponse" }
+        "204":
+          description: "CSRF無効時（No Content）"
         "500": { $ref: "#/components/responses/ServerError" }
 
+  # ───────────── Users ─────────────
   /users/register:
     post:
       tags: ["Users"]
       summary: "ユーザー登録"
-      description: "新規ユーザー登録（認証・CSRF不要）。"
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: "#/components/schemas/UserCreateRequest"
+            schema: { $ref: "#/components/schemas/UserCreateRequest" }
       responses:
         "201":
           description: "登録成功"
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/UserResponse"
+              schema: { $ref: "#/components/schemas/UserResponse" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "409": { $ref: "#/components/responses/Conflict" }
         "500": { $ref: "#/components/responses/ServerError" }
@@ -134,14 +129,13 @@ paths:
   /users/me:
     get:
       tags: ["Users"]
-      summary: "自分のユーザー情報取得（認証不要のダミー想定可）"
+      summary: "自分のユーザー情報取得"
       responses:
         "200":
           description: "取得成功"
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/UserResponse"
+              schema: { $ref: "#/components/schemas/UserResponse" }
         "401": { $ref: "#/components/responses/UnauthorizedError" }
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/ServerError" }
@@ -151,19 +145,16 @@ paths:
       tags: ["Users"]
       summary: "ユーザー情報取得"
       parameters:
-        - name: "id"
-          in: "path"
+        - name: id
+          in: path
           required: true
-          description: "ユーザー識別子"
-          schema:
-            type: string
+          schema: { type: string }
       responses:
         "200":
           description: "取得成功"
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/UserResponse"
+              schema: { $ref: "#/components/schemas/UserResponse" }
         "401": { $ref: "#/components/responses/UnauthorizedError" }
         "403": { $ref: "#/components/responses/ForbiddenError" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -172,27 +163,23 @@ paths:
   /users/update/{id}:
     put:
       tags: ["Users"]
-      summary: "ユーザー情報更新（認証・CSRF不要）"
+      summary: "ユーザー情報更新"
       parameters:
-        - name: "id"
-          in: "path"
+        - name: id
+          in: path
           required: true
-          description: "ユーザー識別子"
-          schema:
-            type: string
+          schema: { type: string }
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: "#/components/schemas/UserUpdateRequest"
+            schema: { $ref: "#/components/schemas/UserUpdateRequest" }
       responses:
         "200":
           description: "更新成功"
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/UserResponse"
+              schema: { $ref: "#/components/schemas/UserResponse" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/UnauthorizedError" }
         "403": { $ref: "#/components/responses/ForbiddenError" }
@@ -202,36 +189,33 @@ paths:
   /users/delete/{id}:
     delete:
       tags: ["Users"]
-      summary: "ユーザー削除（認証・CSRF不要）"
+      summary: "ユーザー削除"
       parameters:
-        - name: "id"
-          in: "path"
+        - name: id
+          in: path
           required: true
-          description: "ユーザー識別子"
-          schema:
-            type: string
+          schema: { type: string }
       responses:
-        "204":
-          description: "削除成功"
+        "204": { description: "削除成功" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/UnauthorizedError" }
         "403": { $ref: "#/components/responses/ForbiddenError" }
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/ServerError" }
 
+  # ───────────── Maps（Index） ─────────────
   /maps/index:
     get:
       tags: ["Maps"]
-      summary: "Index Map取得（親なしMapのみ）"
-      description: "parentMapId が null の Map を返す（キャンパスなど最上位）。画面初期表示用。"
+      summary: "Index Map取得（親なしMapのみ＝root）"
+      description: "parentMapId が null の Map（root）一覧。"
       responses:
         "200":
           description: "取得成功"
           headers:
             ETag:
-              schema:
-                type: string
-              description: "キャッシュ用ETag"
+              description: "インデックスリストのETag（If-None-Match で条件付き GET 可）"
+              schema: { type: string, example: 'W/"8dfcd278e0..."' }
           content:
             application/json:
               schema:
@@ -239,114 +223,194 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: "#/components/schemas/MapResponse"
+                    items: { $ref: "#/components/schemas/MapResponse" }
 
+  # ───────────── Maps（作成） ─────────────
   /maps:
     post:
       tags: ["Maps"]
-      summary: "地図メタ作成（管理者）"
-      description: "背景画像（base64）と自然サイズ（natural size）を登録する。"
+      summary: "マップ作成（root または floor）"
+      description: |
+        - `parentMapId=null` で **root** を作成。
+        - `parentMapId=<rootId>` で **floor** を1つ追加（空のマップ）。
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: "#/components/schemas/MapCreateRequest"
+            schema: { $ref: "#/components/schemas/MapCreateRequest" }
       responses:
         "201":
-          description: "作成成功"
+          description: "作成成功（単体Map）"
+          headers:
+            ETag:
+              description: "作成されたMapのETag"
+              schema: { type: string, example: 'W/"a1b2c3..."' }
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/MapResponse"
+              schema: { $ref: "#/components/schemas/MapResponse" }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/ServerError" }
 
+  # ───────────── Maps（取得／更新／削除） ─────────────
   /maps/{mapId}:
     get:
       tags: ["Maps"]
-      summary: "地図メタ取得（直下の children 付き）"
+      summary: "マップ取得（単体Map）"
+      description: "単一の Map を返す。子メタ情報（children, childrenCount）を含む。"
       parameters:
-        - in: "path"
-          name: "mapId"
+        - in: path
+          name: mapId
           required: true
-          schema:
-            type: string
+          schema: { type: string }
       responses:
         "200":
-          description: "取得成功"
+          description: "取得成功（単体Map）"
+          headers:
+            ETag:
+              description: "単体MapのETag"
+              schema: { type: string, example: 'W/"d4e5f6..."' }
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/MapResponse"
+              schema: { $ref: "#/components/schemas/MapResponse" }
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/ServerError" }
+
     patch:
       tags: ["Maps"]
-      summary: "地図メタ更新（管理者）"
-      description: "必要フィールドのみ部分更新。"
+      summary: "マップ部分更新（単体Map）"
       parameters:
-        - in: "path"
-          name: "mapId"
+        - in: path
+          name: mapId
           required: true
-          schema:
-            type: string
+          schema: { type: string }
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: "#/components/schemas/MapUpdateRequest"
+            schema: { $ref: "#/components/schemas/MapUpdateRequest" }
       responses:
         "200":
-          description: "更新成功"
+          description: "更新成功（単体Map）"
+          headers:
+            ETag:
+              description: "更新後MapのETag"
+              schema: { type: string, example: 'W/"eeaa99..."' }
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/MapResponse"
+              schema: { $ref: "#/components/schemas/MapResponse" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/ServerError" }
+
     delete:
       tags: ["Maps"]
-      summary: "地図メタ削除（再帰的に子マップ・ピンも削除）"
+      summary: "マップ削除（再帰）"
       description: |
-        指定した Map を **ON DELETE CASCADE** 相当で削除します。
-        その配下の **子マップ（再帰）** と **各マップに紐づく全ピン** も同時に削除します。
-        実装はDBの外部キー `ON DELETE CASCADE` またはアプリ層の再帰削除のいずれでも可。
+        指定 `mapId` の単体Mapを削除。  
+        root を削除した場合は、その `parent_map_id=root.id` の全floorも合わせて削除（CASCADE相当）。  
+        floor を削除した場合は、root の `floor_count` を -1、0 なら `has_floors=false`。
       parameters:
-        - in: "path"
-          name: "mapId"
+        - in: path
+          name: mapId
           required: true
-          schema:
-            type: string
+          schema: { type: string }
       responses:
-        "204":
-          description: "削除成功（No Content。配下も含めて削除済み）"
+        "204": { description: "削除成功（No Content）" }
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/ServerError" }
 
+  # ───────────── Floors（追加／最上階削除／スタック取得） ─────────────
+  /maps/{mapId}/floors:
+    post:
+      tags: ["Maps"]
+      summary: "階追加（空の階を1つ追加）"
+      description: |
+        パスの `{mapId}` を親（root）として、空の階を1つ作成する。  
+        リクエストボディは省略可（実装では未使用）。互換のため `MapCreateRequest` を受け付けてもよい。
+      parameters:
+        - in: path
+          name: mapId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MapCreateRequest" }
+      responses:
+        "201":
+          description: "作成成功（作成された階の単体Map）"
+          headers:
+            ETag:
+              description: "作成された階（Map）のETag"
+              schema: { type: string, example: 'W/"112233..."' }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MapResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+    get:
+      tags: ["Maps"]
+      summary: "階スタック取得（1F..順）"
+      description: |
+        指定IDが root でも floor でも受け取り、所属 root の全フロアを 1F.. の順で返す。
+      parameters:
+        - in: path
+          name: mapId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: "取得成功（階スタック）"
+          headers:
+            ETag:
+              description: "rootID と各階の最終更新から作るETag"
+              schema: { type: string, example: 'W/"778899..."' }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FloorStackResponse" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /maps/{mapId}/floors/{floorIndex}:
+    delete:
+      tags: ["Maps"]
+      summary: "階削除（最上階のみ削除可）"
+      description: |
+        - `floorIndex` は **1..floor_count**。  
+        - **現在の `floor_count` と同じ（= 最上階）** ときのみ削除可。  
+        - 削除後は root の `floor_count` を -1、0 なら `has_floors=false`。
+      parameters:
+        - in: path
+          name: mapId
+          required: true
+          schema: { type: string }
+        - in: path
+          name: floorIndex
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "204": { description: "削除成功（No Content）" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  # ───────────── Pins（※元の仕様を保持） ─────────────
   /maps/{mapId}/pins:
     get:
       tags: ["Pins"]
-      summary: "ピン一覧取得（該当Mapの全件）"
-      description: |
-        指定 Map に属する全ピンを返す。正規化座標（0〜1）の相対座標を返すため、
-        クライアントは表示時に現在の画像サイズへ射影すること。
+      summary: "指定Mapのピン一覧（単一Mapに属するピン）"
       parameters:
-        - in: "path"
-          name: "mapId"
+        - in: path
+          name: mapId
           required: true
-          schema:
-            type: string
+          schema: { type: string }
       responses:
         "200":
-          description: "取得成功（全件）"
-          headers:
-            ETag:
-              schema:
-                type: string
+          description: "取得成功"
           content:
             application/json:
               schema:
@@ -354,27 +418,31 @@ paths:
                 properties:
                   items:
                     type: array
-                    items:
-                      $ref: "#/components/schemas/PinResponse"
+                    items: { $ref: "#/components/schemas/PinResponse" }
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/ServerError" }
+
     post:
       tags: ["Pins"]
-      summary: "ピン作成（管理者/担当者）"
+      summary: "ピン作成（単一Mapに紐づけ）"
+      parameters:
+        - in: path
+          name: mapId
+          required: true
+          schema: { type: string }
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: "#/components/schemas/PinCreateRequest"
+            schema: { $ref: "#/components/schemas/PinCreateRequest" }
       responses:
         "201":
           description: "作成成功"
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/PinResponse"
+              schema: { $ref: "#/components/schemas/PinResponse" }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/ServerError" }
 
   /pins/{pinId}:
@@ -382,87 +450,52 @@ paths:
       tags: ["Pins"]
       summary: "ピン詳細取得"
       parameters:
-        - in: "path"
-          name: "pinId"
+        - in: path
+          name: pinId
           required: true
-          schema:
-            type: string
+          schema: { type: string }
       responses:
         "200":
           description: "取得成功"
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/PinResponse"
-        "404": { $ref: "#/components/responses/NotFound" }
-        "500": { $ref: "#/components/responses/ServerError" }
-    patch:
-      tags: ["Pins"]
-      summary: "ピン情報更新（名称/説明/カテゴリ/ステータス等）"
-      parameters:
-        - in: "path"
-          name: "pinId"
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/PinUpdateRequest"
-      responses:
-        "200":
-          description: "更新成功"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PinResponse"
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "500": { $ref: "#/components/responses/ServerError" }
-    delete:
-      tags: ["Pins"]
-      summary: "ピン削除（管理者）"
-      parameters:
-        - in: "path"
-          name: "pinId"
-          required: true
-          schema:
-            type: string
-      responses:
-        "204":
-          description: "削除成功"
+              schema: { $ref: "#/components/schemas/PinResponse" }
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/ServerError" }
 
-  /pins/{pinId}/waittime:
     patch:
       tags: ["Pins"]
-      summary: "待ち時間の更新（担当者用）"
-      description: |
-        待ち時間（分）を更新する。負値は不可。0 は待ち時間なし。
-        更新は差分配信の対象となる。
+      summary: "ピン更新"
       parameters:
-        - in: "path"
-          name: "pinId"
+        - in: path
+          name: pinId
           required: true
-          schema:
-            type: string
+          schema: { type: string }
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: "#/components/schemas/WaittimeUpdateRequest"
+            schema: { $ref: "#/components/schemas/PinUpdateRequest" }
       responses:
         "200":
           description: "更新成功"
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/PinResponse"
+              schema: { $ref: "#/components/schemas/PinResponse" }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+    delete:
+      tags: ["Pins"]
+      summary: "ピン削除"
+      parameters:
+        - in: path
+          name: pinId
+          required: true
+          schema: { type: string }
+      responses:
+        "204": { description: "削除成功" }
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/ServerError" }
 
@@ -483,285 +516,303 @@ components:
 
   responses:
     BadRequest:
-      description: "入力値不正エラー"
+      description: "入力値不正"
       content:
         application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
     UnauthorizedError:
-      description: "認証情報不正エラー（将来用。現時点では未使用）"
+      description: "認証情報不正"
       content:
         application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
     ForbiddenError:
-      description: "権限不足エラー（将来用。現時点では未使用）"
+      description: "権限不足"
       content:
         application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
     Conflict:
-      description: "競合エラー"
+      description: "競合（例: 最上階以外の削除）"
       content:
         application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
     NotFound:
       description: "対象が存在しない"
       content:
         application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
     ServerError:
       description: "サーバ内部エラー"
       content:
         application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   schemas:
+    # ── 共通 ──
     ErrorResponse:
       type: object
+      required: [message]
       properties:
         message:
           type: string
-      required:
-        - message
-
-    PageInfo:
-      type: object
-      properties:
-        page:
-          type: integer
-          example: 1
-        perPage:
-          type: integer
-          example: 50
-        total:
-          type: integer
-          example: 123
-      required:
-        - page
-        - perPage
-        - total
+          example: "validation error"
 
     CsrfResponse:
       type: object
+      required: [csrf_token]
       properties:
         csrf_token:
           type: string
-      required:
-        - csrf_token
+          example: "f02c9d2a-8f6e-4a7e-9f7b-2e8b9c8a2aa1"
 
+    # ── Auth ──
     LoginRequest:
       type: object
-      required:
-        - username
-        - password
+      required: [username, password]
       properties:
         username:
           type: string
-          description: "ログインID"
-          example: "kitano_masaki"
+          example: "kitano"
         password:
           type: string
           format: password
-          description: "ログイン用パスワード"
           example: "Passw0rd!123"
 
     TokenResponse:
       type: object
-      required:
-        - access_token
-        - access_expires_at
+      required: [access_token, access_expires_at]
       properties:
         access_token:
           type: string
           description: "アクセスJWT"
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
         access_expires_at:
           type: string
           format: date-time
-          description: "アクセスJWTの有効期限"
+          example: "2025-10-01T00:00:00Z"
 
-    # --- Map関連（imageData & floorCount、version/isActive/type なし） ---
-    MapChildRef:
+    # ── Users ──
+    UserCreateRequest:
       type: object
-      description: "子マップの軽量参照"
-      required:
-        - id
-        - name
+      required: [username, email]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 50
+          example: "kitano"
+        email:
+          type: string
+          format: email
+          example: "kitano@example.com"
+        displayName:
+          type: string
+          maxLength: 100
+          example: "北野 正樹"
+        password:
+          type: string
+          format: password
+          example: "Passw0rd!123"
+
+    UserUpdateRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          example: "kitano+new@example.com"
+        displayName:
+          type: string
+          maxLength: 100
+          example: "北野 まさき"
+        password:
+          type: string
+          format: password
+          example: "N3wPassw0rd!456"
+
+    UserResponse:
+      type: object
+      required: [id, username, email, createdAt, modifiedAt]
       properties:
         id:
           type: string
-          example: "map_01JCHILD01"
-        name:
+          example: "user_01ABCDEF"
+        username:
           type: string
-          example: "講義棟エリア"
-        hasFloors:
-          type: boolean
-          description: "その配下に floor を持つか"
-          example: true
-        floorCount:
-          type: integer
-          minimum: 0
-          description: "フロア数（floor 未導入の階層では 0 もあり得る）"
-          example: 3
+          example: "kitano"
+        email:
+          type: string
+          example: "kitano@example.com"
+        displayName:
+          type: string
+          example: "北野 正樹"
+        createdAt:
+          type: string
+          format: date-time
+          example: "2025-09-01T12:00:00Z"
+        modifiedAt:
+          type: string
+          format: date-time
+          example: "2025-09-15T09:30:00Z"
 
+    # ── Maps/Floors ──
     MapResponse:
       type: object
       required:
-        - id
-        - name
-        - imageData
-        - naturalWidth
-        - naturalHeight
-        - parentMapId
-        - hasFloors
-        - floorCount
-        - childrenCount
-        - children
-        - createdAt
-        - modifiedAt
+        [ id, name, imageData, naturalWidth, naturalHeight,
+          hasFloors, floorCount, createdAt, modifiedAt ]
       properties:
         id:
           type: string
-          example: "map_01HZXABCDE"
+          example: "map_123"
         name:
           type: string
-          example: "2025 技大祭メインマップ"
+          example: "講義棟エリア（root または floor）"
         imageData:
           type: string
           format: byte
-          description: "背景画像のbase64エンコード文字列"
+          nullable: true
+          description: "背景画像のbase64"
+          example: null
         naturalWidth:
           type: integer
-          minimum: 1
+          minimum: 0
           example: 4096
         naturalHeight:
           type: integer
-          minimum: 1
+          minimum: 0
           example: 3072
         parentMapId:
           type: string
           nullable: true
-          description: "親マップのID（area→campus, floor→area）"
+          description: "rootはnull、floorはroot.id（=同じMAP IDグループ）"
+          example: null
         hasFloors:
           type: boolean
-          description: "このマップが複数フロアを持つか"
+          description: "root 側の集約フラグ（floor では false が一般的）"
           example: true
         floorCount:
           type: integer
           minimum: 0
-          description: "階数（hasFloors=true の場合は 1 以上）"
+          description: "root 側の集約値"
           example: 3
         childrenCount:
           type: integer
-          description: "直下の子マップ数"
-          example: 3
+          minimum: 0
+          description: "子（直下の floor）件数（root のみ意味がある）"
+          example: 2
         children:
           type: array
-          description: "直下の子マップ一覧（常に同梱。空配列の可能性あり）"
+          description: "子（直下の floor）の軽量リスト"
           items:
-            $ref: "#/components/schemas/MapChildRef"
+            type: object
+            required: [id, name, hasFloors, floorCount]
+            properties:
+              id:
+                type: string
+                example: "floor_1"
+              name:
+                type: string
+                example: "1F"
+              hasFloors:
+                type: boolean
+                example: false
+              floorCount:
+                type: integer
+                example: 0
         createdAt:
           type: string
           format: date-time
+          example: "2025-09-01T00:00:00Z"
         modifiedAt:
           type: string
           format: date-time
+          example: "2025-09-20T10:00:00Z"
 
     MapCreateRequest:
       type: object
-      required:
-        - name
-        - imageData
-        - naturalWidth
-        - naturalHeight
+      required: [parentMapId]
       properties:
-        name:
-          type: string
-        imageData:
-          type: string
-          format: byte
-          description: "背景画像のbase64エンコード文字列"
-        naturalWidth:
-          type: integer
-          minimum: 1
-        naturalHeight:
-          type: integer
-          minimum: 1
         parentMapId:
           type: string
           nullable: true
-        hasFloors:
-          type: boolean
-          default: false
-        floorCount:
-          type: integer
-          minimum: 0
-          default: 0
-          description: "hasFloors=true の場合は 1 以上を推奨"
+          description: "nullならroot作成。root.idを指定すると“空の階”を1つ作成（親IDはroot.id）"
+          example: null
 
     MapUpdateRequest:
       type: object
       properties:
         name:
           type: string
+          example: "講義棟エリア（更新）"
         imageData:
           type: string
           format: byte
-          description: "背景画像のbase64エンコード文字列（差し替え時のみ）"
+          example: null
         naturalWidth:
           type: integer
-          minimum: 1
+          minimum: 0
+          example: 5000
         naturalHeight:
           type: integer
-          minimum: 1
+          minimum: 0
+          example: 3500
         parentMapId:
           type: string
           nullable: true
-        hasFloors:
-          type: boolean
+          example: "root_123"
+
+    FloorItem:
+      type: object
+      required: [floorIndex, map]
+      properties:
+        floorIndex:
+          type: integer
+          minimum: 1
+          description: "1=1F..作成時刻昇順で連番付与"
+          example: 2
+        map:
+          $ref: "#/components/schemas/MapResponse"
+
+    FloorStackResponse:
+      type: object
+      required: [rootMapId, rootName, floorCount, items]
+      properties:
+        rootMapId:
+          type: string
+          example: "map_123"
+        rootName:
+          type: string
+          example: "講義棟エリア"
         floorCount:
           type: integer
           minimum: 0
+          example: 3
+        items:
+          type: array
+          description: "1F..最上階（必要に応じ、UI側でrootも別枠表示可）"
+          items: { $ref: "#/components/schemas/FloorItem" }
 
-    # --- Pin関連（説明画像のbase64を追加） ---
-    PinType:
-      type: string
-      enum: ["area_selector","exhibit","service","info"]
-      example: "area_selector"
+    FloorCreateResult:
+      type: object
+      required: [created, stack]
+      properties:
+        created:
+          $ref: "#/components/schemas/FloorItem"
+        stack:
+          $ref: "#/components/schemas/FloorStackResponse"
 
-    PinCategory:
-      type: string
-      enum: ["food","stage","exhibition","game","service","other"]
-      example: "food"
-
-    PinStatus:
-      type: string
-      enum: ["open","paused","closed"]
-      example: "open"
-
+    # ── Pins ──
     PinResponse:
       type: object
       required:
-        - id
-        - mapId
-        - name
-        - xNorm
-        - yNorm
-        - category
-        - status
-        - waitMinutes
-        - createdAt
-        - modifiedAt
+        [ id, mapId, name, xNorm, yNorm, category, status, waitMinutes, createdAt, modifiedAt ]
       properties:
         id:
           type: string
           example: "pin_01J0AABCDE"
         mapId:
           type: string
-          example: "map_01HZXABCDE"
+          example: "map_123"
         name:
           type: string
           example: "ラーメン研究会"
@@ -772,84 +823,105 @@ components:
           type: string
           format: byte
           nullable: true
-          description: "説明用画像のbase64エンコード文字列"
+          example: null
         type:
-          $ref: "#/components/schemas/PinType"
+          type: string
+          enum: ["area_selector","exhibit","service","info"]
+          default: "exhibit"
+          example: "exhibit"
         linkToMapId:
           type: string
           nullable: true
-          description: "type=area_selector の場合に必須。遷移先のエリア/フロアの Map ID"
+          description: "type=area_selector の場合に遷移先Map ID"
+          example: null
         xNorm:
           type: number
           format: float
           minimum: 0
           maximum: 1
-          example: 0.3125
           description: "画像左上(0,0)〜右下(1,1)の正規化X座標"
+          example: 0.3125
         yNorm:
           type: number
           format: float
           minimum: 0
           maximum: 1
-          example: 0.742
           description: "画像左上(0,0)〜右下(1,1)の正規化Y座標"
+          example: 0.742
         category:
-          $ref: "#/components/schemas/PinCategory"
+          type: string
+          enum: ["food","stage","exhibition","game","service","other"]
+          example: "food"
         status:
-          $ref: "#/components/schemas/PinStatus"
+          type: string
+          enum: ["open","paused","closed"]
+          default: "open"
+          example: "open"
         waitMinutes:
           type: integer
           minimum: 0
+          default: 0
           example: 20
         createdAt:
           type: string
           format: date-time
+          example: "2025-09-29T04:00:00Z"
         modifiedAt:
           type: string
           format: date-time
+          example: "2025-09-29T05:00:00Z"
 
     PinCreateRequest:
       type: object
-      required:
-        - name
-        - xNorm
-        - yNorm
-        - category
+      required: [name, xNorm, yNorm, category]
       properties:
         name:
           type: string
           minLength: 1
           maxLength: 100
+          example: "ラーメン研究会"
         description:
           type: string
           maxLength: 1000
+          example: "替え玉あり・スープ無くなり次第終了"
         descriptionImageData:
           type: string
           format: byte
           nullable: true
-          description: "説明用画像のbase64エンコード文字列"
+          example: null
         type:
-          $ref: "#/components/schemas/PinType"
+          type: string
+          enum: ["area_selector","exhibit","service","info"]
+          default: "exhibit"
+          example: "exhibit"
         linkToMapId:
           type: string
           nullable: true
+          example: null
         xNorm:
           type: number
           minimum: 0
           maximum: 1
+          example: 0.31
         yNorm:
           type: number
           minimum: 0
           maximum: 1
+          example: 0.74
         category:
-          $ref: "#/components/schemas/PinCategory"
+          type: string
+          enum: ["food","stage","exhibition","game","service","other"]
+          example: "food"
         status:
-          $ref: "#/components/schemas/PinStatus"
+          type: string
+          enum: ["open","paused","closed"]
           default: "open"
+          example: "open"
         waitMinutes:
           type: integer
           minimum: 0
           default: 0
+          example: 0
 
     PinUpdateRequest:
       type: object
@@ -858,42 +930,39 @@ components:
           type: string
           minLength: 1
           maxLength: 100
+          example: "ラーメン研究会（増席）"
         description:
           type: string
           maxLength: 1000
+          example: "スープ増量、提供速度改善"
         descriptionImageData:
           type: string
           format: byte
           nullable: true
-          description: "説明用画像のbase64エンコード文字列（差し替え時のみ）"
+          example: null
         type:
-          $ref: "#/components/schemas/PinType"
+          type: string
+          enum: ["area_selector","exhibit","service","info"]
+          example: "exhibit"
         linkToMapId:
           type: string
           nullable: true
+          example: null
         xNorm:
           type: number
           minimum: 0
           maximum: 1
+          example: 0.33
         yNorm:
           type: number
           minimum: 0
           maximum: 1
+          example: 0.70
         category:
-          $ref: "#/components/schemas/PinCategory"
-        status:
-          $ref: "#/components/schemas/PinStatus"
-
-    WaittimeUpdateRequest:
-      type: object
-      required:
-        - waitMinutes
-      properties:
-        waitMinutes:
-          type: integer
-          minimum: 0
-          example: 35
-        note:
           type: string
-          maxLength: 200
-          description: "運用メモ（任意、監査ログ用）"
+          enum: ["food","stage","exhibition","game","service","other"]
+          example: "food"
+        status:
+          type: string
+          enum: ["open","paused","closed"]
+          example: "open"
