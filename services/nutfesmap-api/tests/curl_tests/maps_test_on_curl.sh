@@ -1,103 +1,163 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ========= 共通設定（環境変数で上書き可） =========
+# ========= 共通設定 =========
 BASE="${BASE:-http://localhost:8080}"
-UA="${UA:-curl-test/1.2}"
-ROOT_NAME="${ROOT_NAME:-2025 NUTFES}"   # 既存ルートを名前で優先選択
-PATCH_ROOT="${PATCH_ROOT:-0}"           # 1 にすると根マップの自然サイズを最小限PATCH
+UA="${UA:-curl-test/1.5}"
 B64_IMG="${B64_IMG:-iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAAWgmWQ0AAAAASUVORK5CYII=}"
+CLEANUP="${CLEANUP:-1}"  # 1=最後に削除、0=残す
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "ERROR: '$1' not found"; exit 1; }; }
 need jq
-need awk
-need sed
+need curl
 
 curlj() { curl -sS -A "$UA" -H 'Accept: application/json' "$@"; }
+say() { printf '\n== %s ==\n' "$*"; }
+fail() { echo "ERROR: $*"; exit 1; }
+
+assert_eq() {
+  local got="$1" want="$2" msg="${3:-}"
+  if [ "$got" != "$want" ]; then
+    fail "ASSERT FAIL: $msg (got=$got want=$want)"
+  fi
+}
+
+create_root_map() {
+  local name="$1"
+  local id
+  id="$(
+    curlj -X POST "$BASE/maps" \
+      -H 'Content-Type: application/json' \
+      -d '{"parentMapId":null}' \
+    | jq -er '.id'
+  )" || fail "root map を作成できませんでした（$name）"
+
+  # 名前・画像など最低限を PATCH
+  curlj -X PATCH "$BASE/maps/$id" \
+    -H 'Content-Type: application/json' \
+    -d @- >/dev/null <<JSON
+{ "name":"$name", "imageData":"$B64_IMG", "naturalWidth":2048, "naturalHeight":1536 }
+JSON
+  echo "$id"
+}
+
+add_floors() {
+  local root_id="$1"
+  local n="$2"
+  local i fid
+  i=1
+  while [ "$i" -le "$n" ]; do
+    fid="$(curlj -X POST "$BASE/maps/$root_id/floors" | jq -er '.id')" \
+      || fail "floor の作成に失敗しました（root=$root_id, i=$i）"
+    curlj -X PATCH "$BASE/maps/$fid" \
+      -H 'Content-Type: application/json' \
+      -d "{\"name\":\"${i}F\"}" >/dev/null
+    i=$((i+1))
+  done
+}
+
+# ----- ツリー構築ユーティリティ -----
+
+get_map() { curlj -X GET "$BASE/maps/$1"; }
+
+# 指定 ID を根とする部分木 JSON を出力:
+# {id,name,floorCount,hasFloors,naturalWidth,naturalHeight,children:[ ... ]}
+build_tree() {
+  local id="$1"
+  local map_json children_ids children_json cj
+
+  map_json="$(get_map "$id")" || return 1
+
+  # 子 ID の列（改行区切り）を作る
+  if [ "$(echo "$map_json" | jq -r '.floorCount')" != "0" ]; then
+    children_ids="$(curlj -X GET "$BASE/maps/$id/floors" | jq -r '.items[].map.id')"
+  else
+    children_ids="$(echo "$map_json" | jq -r '.children[].id')"
+  fi
+
+  children_json='[]'
+  if [ -n "${children_ids:-}" ]; then
+    # 改行区切りの ID 群をループ
+    while IFS= read -r cid; do
+      [ -z "$cid" ] && continue
+      cj="$(build_tree "$cid")" || return 1
+      children_json="$(jq -c --argjson child "$cj" '. + [ $child ]' <<< "$children_json")"
+    done <<< "$children_ids"
+  fi
+
+  # ノードに children を差し込んで返す
+  echo "$map_json" | jq -c --argjson children "$children_json" \
+    '{id,name,floorCount,hasFloors,naturalWidth,naturalHeight,children:$children}'
+}
+
+# すべての root（parent_map_id=NULL）を列挙してツリーを配列で出力
+print_full_tree_from_roots() {
+  local idx root_ids_json rid subtree trees
+  idx="$(curlj -X GET "$BASE/maps/index")" || return 1
+  trees='[]'
+
+  # ルートの ID 群を 1 行ずつ取り出す
+  while IFS= read -r rid; do
+    [ -z "$rid" ] && continue
+    subtree="$(build_tree "$rid")" || return 1
+    trees="$(jq -c --argjson child "$subtree" '. + [ $child ]' <<< "$trees")"
+  done < <(echo "$idx" | jq -r '.items[].id')
+
+  echo "$trees"
+}
+
+# ========== テスト本体 ==========
 
 echo "BASE=$BASE"
 
-# 1) インデックス取得
-echo
-echo "== 1) 親なしマップ一覧（GET /maps/index） =="
-INDEX_JSON="$(curlj -X GET "$BASE/maps/index")"
-echo "$INDEX_JSON" | jq
+say "1) Index（参考表示）"
+curlj -X GET "$BASE/maps/index" | jq
 
-# 2) 既存のルートIDを決定（ROOT_NAME があれば優先、なければ親なしの先頭）
-echo
-echo "== 2) 既存のルートIDを決定 =="
-ROOT_ID="$(
-  echo "$INDEX_JSON" \
-  | jq -er --arg NAME "$ROOT_NAME" '
-      .items
-      | map(select(.parentMapId == null))
-      | ( (map(select(.name == $NAME))[0].id) // (.[0].id) )
-    '
-)"
-echo "ROOT_ID=$ROOT_ID"
+say "2) 3つの root マップを作成（Index 直下＝root として作成）"
+LECTURE_ID="$(create_root_map "講義棟エリア")"
+OUTDOOR_ID="$(create_root_map "屋外エリア")"
+KITCHEN_ID="$(create_root_map "キッチンカーエリア")"
+echo "LECTURE_ID=$LECTURE_ID"
+echo "OUTDOOR_ID=$OUTDOOR_ID"
+echo "KITCHEN_ID=$KITCHEN_ID"
 
-# 3) ルートの詳細表示（内容は変更しない）
-echo
-echo "== 3) ルート詳細（GET /maps/:id） =="
-curlj -X GET "$BASE/maps/$ROOT_ID" | jq
+say "3) 講義棟エリアへ 1F..3F を追加"
+add_floors "$LECTURE_ID" 3
 
-# 4) （任意）画像や自然サイズを最小限で PATCH したい場合はここで実施
-if [[ "$PATCH_ROOT" == "1" ]]; then
-  echo
-  echo "== 4) ルートを最小限 PATCH（任意） =="
-  curlj -X PATCH "$BASE/maps/$ROOT_ID" \
-    -H 'Content-Type: application/json' \
-    -d @- <<JSON | jq
-{ "naturalWidth": 2048, "naturalHeight": 1536, "imageData": "$B64_IMG" }
-JSON
+say "4) フロアスタック確認（講義棟エリア）"
+STACK_JSON="$(curlj -X GET "$BASE/maps/$LECTURE_ID/floors")"
+echo "$STACK_JSON" | jq
+FCOUNT="$(echo "$STACK_JSON" | jq -r '.floorCount')"
+assert_eq "$FCOUNT" "3" "floorCount must be 3"
+NAMES="$(echo "$STACK_JSON" | jq -r '.items[].map.name' | paste -sd',' -)"
+assert_eq "$NAMES" "1F,2F,3F" "floor names must be 1F,2F,3F"
+
+say "5) Index を再取得（作成結果の確認用）"
+IDX_JSON="$(curlj -X GET "$BASE/maps/index")"
+echo "$IDX_JSON" | jq '.items | map({id,name,floorCount})'
+
+# jq 1.5 でも動くよう any() は使わず長さ判定で確認
+for want in "講義棟エリア" "屋外エリア" "キッチンカーエリア"; do
+  echo "$IDX_JSON" | jq -e --arg w "$want" \
+    '.items | map(select(.name==$w)) | length > 0' >/dev/null \
+    || fail "Index に $want が見つかりません"
+done
+echo "$IDX_JSON" | jq -e --arg w "講義棟エリア" \
+  '.items | map(select(.name==$w and .floorCount==3)) | length > 0' >/dev/null \
+  || fail "Index 上の '講義棟エリア' の floorCount が 3 ではありません"
+
+say "6) ルートからの JSON ツリーを出力（全マップ）"
+FULL_TREE="$(print_full_tree_from_roots)"
+echo "$FULL_TREE" | jq
+
+if [ "${CLEANUP}" = "1" ]; then
+  say "7) 片付け：今回作成した 3 root を削除（再帰）"
+  for id in "$LECTURE_ID" "$OUTDOOR_ID" "$KITCHEN_ID"; do
+    echo "DELETE /maps/$id"
+    curl -sS -A "$UA" -H 'Accept: application/json' -X DELETE "$BASE/maps/$id" -i | head -n1
+  done
+else
+  say "7) CLEANUP=0 のため削除をスキップしました"
 fi
 
-# 5) フロアを2つ追加（POST /maps/:mapId/floors x2）
-echo
-echo "== 5) フロアを2つ追加（POST /maps/:mapId/floors x2） =="
-F1_ID="$(curlj -X POST "$BASE/maps/$ROOT_ID/floors" | jq -er '.id')"
-echo "F1_ID=$F1_ID"
-F2_ID="$(curlj -X POST "$BASE/maps/$ROOT_ID/floors" | jq -er '.id')"
-echo "F2_ID=$F2_ID"
-
-# 6) フロア一覧（1F..順）
-echo
-echo "== 6) フロア一覧（GET /maps/:mapId/floors） 1F..順 =="
-curlj -X GET "$BASE/maps/$ROOT_ID/floors" | jq
-
-# 7) 最上階以外の削除はエラーであることを確認（/floors/1）
-echo
-echo "== 7) 最上階以外は削除できないことの確認（DELETE /maps/:id/floors/1） =="
-set +e
-HTTP_CODE="$(curl -sS -A "$UA" -H 'Accept: application/json' -X DELETE "$BASE/maps/$ROOT_ID/floors/1" -i | awk 'NR==1{print $2}')"
-set -e
-echo "HTTP_CODE=$HTTP_CODE  # 400 を想定"
-
-# 8) 最上階（2F）を削除
-echo
-echo "== 8) 最上階を削除（DELETE /maps/:id/floors/2） =="
-curl -sS -A "$UA" -H 'Accept: application/json' -X DELETE "$BASE/maps/$ROOT_ID/floors/2" -i
-
-# 9) フロア一覧を再確認
-echo
-echo "== 9) フロア一覧を再確認（GET /maps/:id/floors） =="
-curlj -X GET "$BASE/maps/$ROOT_ID/floors" | jq
-
-# 10) ETag を取得して条件付き取得を試す
-echo
-echo "== 10) 条件付き取得（ETag） =="
-ETAG="$(curl -sS -A "$UA" -i "$BASE/maps/index" | awk -F': ' 'tolower($1)=="etag"{gsub("\r","",$2);print $2;exit}')"
-echo "ETag=$ETAG"
-curl -sS -A "$UA" -H "If-None-Match: $ETAG" "$BASE/maps/index" -i
-
-# 11) 片付け：作成したフロアを個別削除（ルートは削除しない）
-echo
-echo "== 11) 片付け：作成したフロアを個別削除（DELETE /maps/:floorId） =="
-# 2F はすでに削除済みの可能性があるので失敗は無視
-set +e
-curl -sS -A "$UA" -H 'Accept: application/json' -X DELETE "$BASE/maps/$F2_ID" -i >/dev/null
-set -e
-curl -sS -A "$UA" -H 'Accept: application/json' -X DELETE "$BASE/maps/$F1_ID" -i
-
-echo
-echo "== 完了 =="
+say "完了"

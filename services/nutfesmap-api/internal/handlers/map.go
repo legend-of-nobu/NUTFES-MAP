@@ -48,19 +48,20 @@ func (h *MapHandler) Create(c echo.Context) error {
 	newID := uuid.NewString()
 	ctx := c.Request().Context()
 
-	// 空マップを作成（name/image/natural_* は未設定、親のみ任意）
-	if err := h.Repo.CreateEmptyMapTx(ctx, newID, req.ParentMapID); err != nil {
-		// DB起因の失敗はそのまま Echo が 500 にマップ
+	// 親なし=ルート作成／親あり=フロア追加（親の has_floors/floor_count も更新）
+	if err := h.Repo.CreateByRequest(ctx, newID, &repository.MapCreateRequest{
+		ParentMapID: req.ParentMapID,
+	}); err != nil {
 		return err
 	}
 
-	// 作成直後の状態を取得（常に repository.MapResponse を返す）
+	// 作成直後の状態を取得
 	res, err := h.Repo.FindMapResponseByID(ctx, newID)
 	if err != nil {
 		return err
 	}
 	if res == nil {
-		// まれに直後の再読込に失敗した場合のフォールバック
+		// 直後の再読込に失敗した場合のフォールバック
 		now := time.Now().UTC()
 		res = &repository.MapResponse{
 			ID:            newID,
@@ -237,8 +238,8 @@ func (h *MapHandler) Delete(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-// POST /maps/:mapId/floors
-// 指定 root の直下に空の Floor を1件追加し、作成された Floor の MapResponse を返します。
+// フロア専用作成: {mapId} をフロアスタックのルート（通常はエリア）として、空のフロアを1件追加。
+// 親エリアの has_floors=true / floor_count++ を更新します。
 func (h *MapHandler) CreateFloor(c echo.Context) error {
 	mapID := c.Param("mapId")
 	if mapID == "" {
@@ -248,16 +249,17 @@ func (h *MapHandler) CreateFloor(c echo.Context) error {
 	newID := uuid.NewString()
 	ctx := c.Request().Context()
 
-	// 親(root)存在チェック＋作成（内部で FOR UPDATE / 集約更新あり）
-	if err := h.Repo.CreateEmptyMapTx(ctx, newID, &mapID); err != nil {
-		// 親なし → 404 に寄せる（Repository は "parent root not found" のエラー文字列）
-		if strings.Contains(err.Error(), "parent root not found") {
-			return echo.NewHTTPError(http.StatusNotFound, "parent root not found")
+	// 変更点: Repo.CreateEmptyFloorTx を使用（親の集約値を更新）
+	if err := h.Repo.CreateEmptyFloorTx(ctx, newID, mapID); err != nil {
+		// 親（=フロアルート=エリア）なし → 404
+		// Repository 側は "floor root not found: <id>" を返す
+		if strings.Contains(err.Error(), "floor root not found") {
+			return echo.NewHTTPError(http.StatusNotFound, "floor root not found")
 		}
 		return err // その他は 500
 	}
 
-	// 作成した Floor を返却
+	// 作成したフロアを返却
 	res, err := h.Repo.FindMapResponseByID(ctx, newID)
 	if err != nil {
 		return err
@@ -323,7 +325,10 @@ func (h *MapHandler) DeleteTopFloor(c echo.Context) error {
 }
 
 // GET /maps/:mapId/floors
-// 指定IDが root でも floor でも受け取り、所属 root の全フロアを 1F.. の順で返します。
+// フロアスタック取得:
+// - {mapId} がエリア    → その直下のフロアを 1F.. 順で返す
+// - {mapId} がフロア    → 親エリア直下の全フロアを返す
+// - {mapId} が Index    → 空のスタック（floorCount=0, items=[]）を返す
 func (h *MapHandler) ListFloors(c echo.Context) error {
 	mapID := c.Param("mapId")
 	if mapID == "" {
@@ -347,6 +352,5 @@ func (h *MapHandler) ListFloors(c echo.Context) error {
 	}
 	c.Response().Header().Set("ETag", `W/"`+hex.EncodeToString(hsh.Sum(nil))+`"`)
 
-	// repository.FloorStackResponse をそのまま返却
 	return c.JSON(http.StatusOK, fs)
 }

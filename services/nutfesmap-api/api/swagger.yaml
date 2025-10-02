@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: "nutfesmap 技大祭マップ API"
-  version: "0.6.5"
+  version: "0.7.1"
   description: |
     技大祭マップサービスAPI（Auth / Users / Maps / Floors / Pins）
 
@@ -10,10 +10,11 @@ info:
     - 「同じMAP IDで全階を扱う」は、**root（親）Mapの `id` をグループID** として用い、
       各階の `parent_map_id` に **rootの `id`** を格納（各階自身の `id` はユニーク）。
         - 例）root: id=`map_123`、各階は `parent_map_id=map_123` を共有。
-    - 取得は **グループID（=root.id）** を指定して **root＋全階** を一括返却（場合分け不要）。
-    - **階追加APIのリクエストは、マップ追加API（/maps POST）と完全同一**（= `MapCreateRequest`）。
-      - クライアントは `{"parentMapId": "<rootIdまたはこのpathの{mapId}>”}` **だけ**送ればよい（空のフロアを作成）。
-      - サーバは `parentMapId` が path の `{mapId}` と不一致でも **path側の rootId を優先** して処理する。
+    - ルート（親なし）一覧は `/maps/index`。
+    - 単体の Map は `/maps/{mapId}` で取得・更新。
+    - **フロア（階）スタックの取得は `/maps/{mapId}/floors`**（`mapId` は root でも floor でも可）。
+    - **階の追加は `/maps/{mapId}/floors`（POST）**、**階の削除は `/maps/{mapId}/floors/{floorIndex}`（DELETE）**。
+    - ETag は `ID` と `ModifiedAt`（または階ごとの `ModifiedAt`）から生成し、主要レスポンスに付与。
 
 servers:
   - url: "http://localhost:8080"
@@ -97,10 +98,12 @@ paths:
       summary: "CSRFトークン取得"
       responses:
         "200":
-          description: "取得成功"
+          description: "取得成功（CSRF有効時）"
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CsrfResponse" }
+        "204":
+          description: "CSRF無効時（No Content）"
         "500": { $ref: "#/components/responses/ServerError" }
 
   # ───────────── Users ─────────────
@@ -209,6 +212,10 @@ paths:
       responses:
         "200":
           description: "取得成功"
+          headers:
+            ETag:
+              description: "インデックスリストのETag（If-None-Match で条件付き GET 可）"
+              schema: { type: string, example: 'W/"8dfcd278e0..."' }
           content:
             application/json:
               schema:
@@ -225,8 +232,7 @@ paths:
       summary: "マップ作成（root または floor）"
       description: |
         - `parentMapId=null` で **root** を作成。
-        - `parentMapId=<rootId>` で **floor** を1つ追加（空のマップ）。  
-          追加時は root の `has_floors=true`、`floor_count` を +1。
+        - `parentMapId=<rootId>` で **floor** を1つ追加（空のマップ）。
       requestBody:
         required: true
         content:
@@ -235,6 +241,10 @@ paths:
       responses:
         "201":
           description: "作成成功（単体Map）"
+          headers:
+            ETag:
+              description: "作成されたMapのETag"
+              schema: { type: string, example: 'W/"a1b2c3..."' }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/MapResponse" }
@@ -246,11 +256,8 @@ paths:
   /maps/{mapId}:
     get:
       tags: ["Maps"]
-      summary: "マップ取得（“同じMAP ID”=グループの全件を一括）"
-      description: |
-        - `mapId` が **root のID** の場合：その root と `parent_map_id=mapId` の全階をまとめて返す。
-        - `mapId` が **階のID** の場合：その階の `parent_map_id`（=root.id）を特定して同様に返す。
-        - **常にグループ全体（root＋全階）** を返す。余計なクエリは不要。
+      summary: "マップ取得（単体Map）"
+      description: "単一の Map を返す。子メタ情報（children, childrenCount）を含む。"
       parameters:
         - in: path
           name: mapId
@@ -258,10 +265,14 @@ paths:
           schema: { type: string }
       responses:
         "200":
-          description: "取得成功（階スタック）"
+          description: "取得成功（単体Map）"
+          headers:
+            ETag:
+              description: "単体MapのETag"
+              schema: { type: string, example: 'W/"d4e5f6..."' }
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/FloorStackResponse" }
+              schema: { $ref: "#/components/schemas/MapResponse" }
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/ServerError" }
 
@@ -281,6 +292,10 @@ paths:
       responses:
         "200":
           description: "更新成功（単体Map）"
+          headers:
+            ETag:
+              description: "更新後MapのETag"
+              schema: { type: string, example: 'W/"eeaa99..."' }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/MapResponse" }
@@ -305,32 +320,59 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/ServerError" }
 
-  # ───────────── Floors（追加／最上階削除） ─────────────
+  # ───────────── Floors（追加／最上階削除／スタック取得） ─────────────
   /maps/{mapId}/floors:
     post:
       tags: ["Maps"]
-      summary: "階追加（リクエストは /maps POST と同一：MapCreateRequest）"
+      summary: "階追加（空の階を1つ追加）"
+      description: |
+        パスの `{mapId}` を親（root）として、空の階を1つ作成する。  
+        リクエストボディは省略可（実装では未使用）。互換のため `MapCreateRequest` を受け付けてもよい。
+      parameters:
+        - in: path
+          name: mapId
+          required: true
+          schema: { type: string }
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema: { $ref: "#/components/schemas/MapCreateRequest" }
-            examples:
-              onlyParent:
-                summary: "ParentMapIDだけ渡す"
-                value: { parentMapId: "map_123" }
-              withName:
-                summary: "任意で階の表示名を指定"
-                value: { parentMapId: "map_123", name: "講義棟 4F" }
       responses:
         "201":
-          description: "作成成功（作成した階＋最新スタックを返す）"
+          description: "作成成功（作成された階の単体Map）"
+          headers:
+            ETag:
+              description: "作成された階（Map）のETag"
+              schema: { type: string, example: 'W/"112233..."' }
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/FloorCreateResult" }
+              schema: { $ref: "#/components/schemas/MapResponse" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+    get:
+      tags: ["Maps"]
+      summary: "階スタック取得（1F..順）"
+      description: |
+        指定IDが root でも floor でも受け取り、所属 root の全フロアを 1F.. の順で返す。
+      parameters:
+        - in: path
+          name: mapId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: "取得成功（階スタック）"
+          headers:
+            ETag:
+              description: "rootID と各階の最終更新から作るETag"
+              schema: { type: string, example: 'W/"778899..."' }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FloorStackResponse" }
+        "404": { $ref: "#/components/responses/NotFound" }
         "500": { $ref: "#/components/responses/ServerError" }
 
   /maps/{mapId}/floors/{floorIndex}:
@@ -339,7 +381,7 @@ paths:
       summary: "階削除（最上階のみ削除可）"
       description: |
         - `floorIndex` は **1..floor_count**。  
-        - **現在の `floor_count` と同じ値** のときのみ削除可（= 最上階のみ）。  
+        - **現在の `floor_count` と同じ（= 最上階）** ときのみ削除可。  
         - 削除後は root の `floor_count` を -1、0 なら `has_floors=false`。
       parameters:
         - in: path
@@ -352,11 +394,11 @@ paths:
           schema: { type: integer, minimum: 1 }
       responses:
         "204": { description: "削除成功（No Content）" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
         "500": { $ref: "#/components/responses/ServerError" }
 
-  # ───────────── Pins ─────────────
+  # ───────────── Pins（※元の仕様を保持） ─────────────
   /maps/{mapId}/pins:
     get:
       tags: ["Pins"]
@@ -617,7 +659,7 @@ components:
       type: object
       required:
         [ id, name, imageData, naturalWidth, naturalHeight,
-          parentMapId, hasFloors, floorCount, createdAt, modifiedAt ]
+          hasFloors, floorCount, createdAt, modifiedAt ]
       properties:
         id:
           type: string
@@ -646,13 +688,37 @@ components:
           example: null
         hasFloors:
           type: boolean
-          description: "root 側の集約フラグ"
+          description: "root 側の集約フラグ（floor では false が一般的）"
           example: true
         floorCount:
           type: integer
           minimum: 0
           description: "root 側の集約値"
           example: 3
+        childrenCount:
+          type: integer
+          minimum: 0
+          description: "子（直下の floor）件数（root のみ意味がある）"
+          example: 2
+        children:
+          type: array
+          description: "子（直下の floor）の軽量リスト"
+          items:
+            type: object
+            required: [id, name, hasFloors, floorCount]
+            properties:
+              id:
+                type: string
+                example: "floor_1"
+              name:
+                type: string
+                example: "1F"
+              hasFloors:
+                type: boolean
+                example: false
+              floorCount:
+                type: integer
+                example: 0
         createdAt:
           type: string
           format: date-time
@@ -690,6 +756,10 @@ components:
           type: integer
           minimum: 0
           example: 3500
+        parentMapId:
+          type: string
+          nullable: true
+          example: "root_123"
 
     FloorItem:
       type: object

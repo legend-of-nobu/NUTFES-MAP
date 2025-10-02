@@ -66,7 +66,7 @@ const indexChildrenByParentsSQL = "SELECT id, COALESCE(name, ''), has_floors, fl
 
 const insertEmptyMapSQL = "INSERT INTO maps (id, name, image_data, natural_width, natural_height, parent_map_id, has_floors, floor_count, created_at, modified_at) VALUES (?,?,?,?,?,?,?,?,?,?)"
 
-const parentCheckForUpdateSQL = "SELECT COUNT(*) FROM maps WHERE id = ? AND parent_map_id IS NULL AND deleted_at IS NULL FOR UPDATE"
+const parentCheckForUpdateSQL = "SELECT COUNT(*) FROM maps WHERE id = ? AND deleted_at IS NULL FOR UPDATE"
 
 const parentAggregateUpdateSQL = "UPDATE maps SET has_floors = TRUE, floor_count = floor_count + 1, modified_at = ? WHERE id = ? AND deleted_at IS NULL"
 
