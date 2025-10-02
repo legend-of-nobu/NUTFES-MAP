@@ -19,9 +19,8 @@ build:
 
 ## 全ビルドし直して起動（キャッシュなし）
 rebuild:
-	$(DC) down
-	$(DC) build --no-cache
-	$(DC) up -d
+	$(DC) down -v
+	$(DC) up -d --build
 
 ## イメージの pull（依存イメージの更新）
 pull:
