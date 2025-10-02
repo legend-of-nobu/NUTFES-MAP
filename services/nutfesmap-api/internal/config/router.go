@@ -32,6 +32,7 @@ func SetupRouter(cfg *Config) *echo.Echo {
 
 	userRepo := &repository.UserRepository{DB: db}
 	rtRepo := &repository.RefreshTokenRepository{DB: db}
+	mapRepo := repository.NewMapRepository(db)
 
 	cookieCfg := handlers.CookieConf{
 		Name:     cfg.CookieNameRT,
@@ -42,6 +43,7 @@ func SetupRouter(cfg *Config) *echo.Echo {
 	}
 	authH := handlers.NewAuthHandler(userRepo, rtRepo, cfg.JWTSigningKey, cfg.AccessTokenTTLMin, cfg.RefreshTokenTTLH, cookieCfg)
 	userH := handlers.NewUserHandler(userRepo)
+	mapH := handlers.NewMapHandler(mapRepo)
 
 	// Echo標準ミドルウェア
 	e.Use(echoMW.Logger())
@@ -94,6 +96,21 @@ func SetupRouter(cfg *Config) *echo.Echo {
 	usersG := e.Group("/users", csrfMW)
 	usersG.POST("/register", userH.Register)
 
+	// /maps 公開
+	mapsG := e.Group("/maps", csrfMW)
+
+	// まず floors 系を先に
+	mapsG.POST("/:mapId/floors", mapH.CreateFloor)                  // 追加
+	mapsG.DELETE("/:mapId/floors/:floorIndex", mapH.DeleteTopFloor) // 最上階削除
+	mapsG.GET("/:mapId/floors", mapH.ListFloors)                    // 一覧（1F..）
+
+	// 次に汎用
+	mapsG.POST("", mapH.Create)
+	mapsG.GET("/index", mapH.Index)
+	mapsG.GET("/:mapId", mapH.Show)
+	mapsG.PATCH("/:mapId", mapH.Update)
+	mapsG.DELETE("/:mapId", mapH.Delete)
+
 	// /users 認証必須
 	jwtCfg := echojwt.Config{
 		SigningKey: []byte(cfg.JWTSigningKey),
@@ -109,5 +126,10 @@ func SetupRouter(cfg *Config) *echo.Echo {
 
 	// シャットダウン時クローズ
 	e.Server.RegisterOnShutdown(func() { _ = db.Close() })
+
+	for _, r := range e.Routes() {
+		e.Logger.Infof("route: %-6s %s -> %s", r.Method, r.Path, r.Name)
+	}
+
 	return e
 }
