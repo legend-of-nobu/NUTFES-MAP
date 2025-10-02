@@ -14,7 +14,15 @@ import (
 
 type MapRepository struct{ DB *sql.DB }
 
+func NewMapRepository(db *sql.DB) *MapRepository { return &MapRepository{DB: db} }
+
+//
+// ====== リクエスト/レスポンス DTO ======
+//
+
 type MapCreateRequest struct {
+	// Swagger準拠: parentMapId のみ
+	// null なら root 作成、rootId を指定すると空の floor を1つ作成
 	ParentMapID *string `json:"parentMapId"`
 }
 
@@ -48,11 +56,53 @@ type MapResponse struct {
 	ModifiedAt    time.Time        `json:"modifiedAt"`
 }
 
-func NewMapRepository(db *sql.DB) *MapRepository { return &MapRepository{DB: db} }
+// FloorStack用DTO（Swagger準拠）
+type FloorItemDTO struct {
+	FloorIndex int         `json:"floorIndex"`
+	Map        MapResponse `json:"map"`
+}
 
-// 作成（空マップ）: name=""、image_data=NULL、natural_*=0
-func (r *MapRepository) CreateEmpty(ctx context.Context, id string, parentID *string) error {
+type FloorStackResponse struct {
+	RootMapID  string         `json:"rootMapId"`
+	RootName   string         `json:"rootName"`
+	FloorCount int            `json:"floorCount"`
+	Items      []FloorItemDTO `json:"items"`
+}
+
+//
+// ====== 作成（root/floor） ======
+//
+
+// 既存 CreateEmptyMapTx は「汎用の子/ルート作成（集約値を更新しない）」に変更
+func (r *MapRepository) CreateEmptyMapTx(ctx context.Context, id string, parentID *string) error {
+	tx, err := r.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			panic(p)
+		}
+	}()
+
 	now := time.Now().UTC()
+
+	// 親指定がある場合は、親の存在だけを検証（親が root である必要はない）
+	if parentID != nil {
+		var cnt int
+		if err := tx.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM maps WHERE id = ? AND deleted_at IS NULL FOR UPDATE",
+			*parentID,
+		).Scan(&cnt); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if cnt == 0 {
+			_ = tx.Rollback()
+			return fmt.Errorf("parent not found: %s", *parentID)
+		}
+	}
 
 	var parent any
 	if parentID == nil {
@@ -60,33 +110,144 @@ func (r *MapRepository) CreateEmpty(ctx context.Context, id string, parentID *st
 	} else {
 		parent = *parentID
 	}
-
-	_, err := r.DB.ExecContext(ctx, `
-		INSERT INTO maps (
-			id, name, image_data, natural_width, natural_height, parent_map_id, created_at, modified_at
-		) VALUES (?,?,?,?,?,?,?,?)
-	`, id, "", nil, 0, 0, parent, now, now)
-	return err
-}
-
-// 既存互換（最小挿入）
-func (r *MapRepository) Insert(ctx context.Context, m *model.Map) error {
-	now := time.Now().UTC()
-
-	var parent any
-	if m.ParentMapID == nil {
-		parent = nil
-	} else {
-		parent = *m.ParentMapID
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO maps
+		  (id, name, image_data, natural_width, natural_height, parent_map_id, has_floors, floor_count, created_at, modified_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		id, "", nil, 0, 0, parent, false, 0, now, now,
+	); err != nil {
+		_ = tx.Rollback()
+		return err
 	}
 
-	_, err := r.DB.ExecContext(ctx, `
-		INSERT INTO maps (
-			id, name, image_data, natural_width, natural_height, parent_map_id, created_at, modified_at
-		) VALUES (?,?,?,?,?,?,?,?)
-	`, m.ID, "", nil, 0, 0, parent, now, now)
-	return err
+	return tx.Commit()
 }
+
+// 新規追加: フロア専用の作成（親＝フロアのルート：通常はエリア）
+// 親の has_floors=true, floor_count++ を更新する
+func (r *MapRepository) CreateEmptyFloorTx(ctx context.Context, id string, floorRootID string) error {
+	tx, err := r.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			panic(p)
+		}
+	}()
+
+	now := time.Now().UTC()
+
+	// フロア親（=フロアスタックのルート＝エリア）の存在チェック（FOR UPDATE）
+	{
+		var cnt int
+		if err := tx.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM maps WHERE id = ? AND deleted_at IS NULL FOR UPDATE",
+			floorRootID,
+		).Scan(&cnt); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if cnt == 0 {
+			_ = tx.Rollback()
+			return fmt.Errorf("floor root not found: %s", floorRootID)
+		}
+	}
+
+	// フロア（空Map）を挿入（parent_map_id = floorRootID）
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO maps
+		  (id, name, image_data, natural_width, natural_height, parent_map_id, has_floors, floor_count, created_at, modified_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		id, "", nil, 0, 0, floorRootID, false, 0, now, now,
+	); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	// 親（エリア）を更新
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE maps
+		   SET has_floors = TRUE,
+		       floor_count = floor_count + 1,
+		       modified_at = ?
+		 WHERE id = ? AND deleted_at IS NULL
+	`, now, floorRootID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// 仕様に合わせた入口: /maps POST および /maps/{id}/floors POST の実体
+func (r *MapRepository) CreateByRequest(ctx context.Context, newID string, req *MapCreateRequest) error {
+	tx, err := r.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			panic(p)
+		}
+	}()
+
+	now := time.Now().UTC()
+
+	// 親なし（=root作成）
+	if req.ParentMapID == nil {
+		if _, err := tx.ExecContext(ctx,
+			"INSERT INTO maps (id, name, image_data, natural_width, natural_height, parent_map_id, has_floors, floor_count, created_at, modified_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+			newID, "", nil, 0, 0, nil, false, 0, now, now,
+		); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		return tx.Commit()
+	}
+
+	// 親あり（=floor作成）。親の存在チェック + FOR UPDATE
+	{
+		var cnt int
+		if err := tx.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM maps WHERE id = ? AND deleted_at IS NULL FOR UPDATE",
+			*req.ParentMapID,
+		).Scan(&cnt); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if cnt == 0 {
+			_ = tx.Rollback()
+			return fmt.Errorf("parent not found: %s", *req.ParentMapID)
+		}
+	}
+
+	// floor の INSERT
+	if _, err := tx.ExecContext(ctx,
+		"INSERT INTO maps (id, name, image_data, natural_width, natural_height, parent_map_id, has_floors, floor_count, created_at, modified_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+		newID, "", nil, 0, 0, *req.ParentMapID, false, 0, now, now,
+	); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	// 親の集約更新（has_floors=true, floor_count+1）
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE maps SET has_floors = TRUE, floor_count = floor_count + 1, modified_at = ? WHERE id = ? AND deleted_at IS NULL",
+		now, *req.ParentMapID,
+	); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	return tx.Commit()
+}
+
+//
+// ====== 取得（単体・index・階スタック） ======
+//
 
 type MapAggregate struct {
 	Base          *model.Map
@@ -95,23 +256,7 @@ type MapAggregate struct {
 }
 
 func (r *MapRepository) FindAggregate(ctx context.Context, id string) (*MapAggregate, error) {
-	row := r.DB.QueryRowContext(ctx, `
-		SELECT
-		  id,
-		  COALESCE(name, ''),
-		  COALESCE(image_data, ''),
-		  COALESCE(natural_width, 0),
-		  COALESCE(natural_height, 0),
-		  parent_map_id,
-		  has_floors,
-		  floor_count,
-		  created_at,
-		  modified_at,
-		  deleted_at
-		FROM maps
-		WHERE id = ? AND deleted_at IS NULL
-		LIMIT 1
-	`, id)
+	row := r.DB.QueryRowContext(ctx, "SELECT id, COALESCE(name, ''), COALESCE(image_data, ''), COALESCE(natural_width, 0), COALESCE(natural_height, 0), parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at FROM maps WHERE id = ? AND deleted_at IS NULL LIMIT 1", id)
 
 	var base model.Map
 	var imgStr string
@@ -119,17 +264,9 @@ func (r *MapRepository) FindAggregate(ctx context.Context, id string) (*MapAggre
 	var deletedAtN sql.NullTime
 
 	if err := row.Scan(
-		&base.ID,
-		&base.Name,
-		&imgStr,
-		&base.NaturalWidth,
-		&base.NaturalHeight,
-		&parentNS,
-		&base.HasFloors,
-		&base.FloorCount,
-		&base.CreatedAt,
-		&base.ModifiedAt,
-		&deletedAtN,
+		&base.ID, &base.Name, &imgStr, &base.NaturalWidth, &base.NaturalHeight,
+		&parentNS, &base.HasFloors, &base.FloorCount,
+		&base.CreatedAt, &base.ModifiedAt, &deletedAtN,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -144,24 +281,16 @@ func (r *MapRepository) FindAggregate(ctx context.Context, id string) (*MapAggre
 		t := deletedAtN.Time
 		base.DeletedAt = &t
 	}
-	// LONGTEXTはそのまま返す
 	base.ImageData = imgStr
 
 	// 子件数
 	var cnt int
-	if err := r.DB.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL
-	`, base.ID).Scan(&cnt); err != nil {
+	if err := r.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL", base.ID).Scan(&cnt); err != nil {
 		return nil, err
 	}
 
 	// 子一覧
-	rows, err := r.DB.QueryContext(ctx, `
-		SELECT id, COALESCE(name, ''), has_floors, floor_count
-		FROM maps
-		WHERE parent_map_id = ? AND deleted_at IS NULL
-		ORDER BY name
-	`, base.ID)
+	rows, err := r.DB.QueryContext(ctx, "SELECT id, COALESCE(name, ''), has_floors, floor_count FROM maps WHERE parent_map_id = ? AND deleted_at IS NULL ORDER BY name", base.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -179,33 +308,12 @@ func (r *MapRepository) FindAggregate(ctx context.Context, id string) (*MapAggre
 		return nil, err
 	}
 
-	return &MapAggregate{
-		Base:          &base,
-		ChildrenCount: cnt,
-		Children:      children,
-	}, nil
+	return &MapAggregate{Base: &base, ChildrenCount: cnt, Children: children}, nil
 }
 
-// 親（root）一覧と子の簡易情報
+// Index（root一覧＋各rootの軽量な子情報）
 func (r *MapRepository) FindIndexAggregates(ctx context.Context) ([]*MapAggregate, error) {
-	parentRows, err := r.DB.QueryContext(ctx, `
-		SELECT
-		  id,
-		  COALESCE(name, ''),
-		  COALESCE(image_data, ''),
-		  COALESCE(natural_width, 0),
-		  COALESCE(natural_height, 0),
-		  parent_map_id,
-		  has_floors,
-		  floor_count,
-		  created_at,
-		  modified_at,
-		  deleted_at
-		FROM maps
-		WHERE parent_map_id IS NULL
-		  AND deleted_at IS NULL
-		ORDER BY created_at DESC
-	`)
+	parentRows, err := r.DB.QueryContext(ctx, "SELECT id, COALESCE(name, ''), COALESCE(image_data, ''), COALESCE(natural_width, 0), COALESCE(natural_height, 0), parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at FROM maps WHERE parent_map_id IS NULL AND deleted_at IS NULL ORDER BY created_at DESC")
 	if err != nil {
 		return nil, err
 	}
@@ -220,17 +328,9 @@ func (r *MapRepository) FindIndexAggregates(ctx context.Context) ([]*MapAggregat
 		var deletedAtN sql.NullTime
 
 		if err := parentRows.Scan(
-			&base.ID,
-			&base.Name,
-			&imgStr,
-			&base.NaturalWidth,
-			&base.NaturalHeight,
-			&parentNS,
-			&base.HasFloors,
-			&base.FloorCount,
-			&base.CreatedAt,
-			&base.ModifiedAt,
-			&deletedAtN,
+			&base.ID, &base.Name, &imgStr, &base.NaturalWidth, &base.NaturalHeight,
+			&parentNS, &base.HasFloors, &base.FloorCount,
+			&base.CreatedAt, &base.ModifiedAt, &deletedAtN,
 		); err != nil {
 			return nil, err
 		}
@@ -264,13 +364,7 @@ func (r *MapRepository) FindIndexAggregates(ctx context.Context) ([]*MapAggregat
 	}
 
 	// 子件数
-	cntQuery, cntArgs := buildParentInQuery(`
-		SELECT parent_map_id, COUNT(*)
-		FROM maps
-		WHERE deleted_at IS NULL
-		  AND parent_map_id IN ({{IN}})
-		GROUP BY parent_map_id
-	`, parentIDs)
+	cntQuery, cntArgs := buildParentInQuery("SELECT parent_map_id, COUNT(*) FROM maps WHERE deleted_at IS NULL AND parent_map_id IN ({{IN}}) GROUP BY parent_map_id", parentIDs)
 	cntRows, err := r.DB.QueryContext(ctx, cntQuery, cntArgs...)
 	if err != nil {
 		return nil, err
@@ -291,13 +385,7 @@ func (r *MapRepository) FindIndexAggregates(ctx context.Context) ([]*MapAggregat
 	}
 
 	// 子の軽量一覧
-	childQuery, childArgs := buildParentInQuery(`
-		SELECT id, COALESCE(name, ''), has_floors, floor_count, parent_map_id
-		FROM maps
-		WHERE deleted_at IS NULL
-		  AND parent_map_id IN ({{IN}})
-		ORDER BY name ASC
-	`, parentIDs)
+	childQuery, childArgs := buildParentInQuery("SELECT id, COALESCE(name, ''), has_floors, floor_count, parent_map_id FROM maps WHERE deleted_at IS NULL AND parent_map_id IN ({{IN}}) ORDER BY name ASC", parentIDs)
 	cRows, err := r.DB.QueryContext(ctx, childQuery, childArgs...)
 	if err != nil {
 		return nil, err
@@ -319,6 +407,85 @@ func (r *MapRepository) FindIndexAggregates(ctx context.Context) ([]*MapAggregat
 	}
 
 	return parents, nil
+}
+
+// anyID がエリア(root)ならその直下、フロアならその親エリア直下を 1F.. の順で返す
+func (r *MapRepository) FindFloorStackByAnyID(ctx context.Context, anyID string) (*FloorStackResponse, error) {
+	// 1) anyID の aggregate をまず読む（ここで floor の場合は子件数=0 の想定）
+	ag, err := r.FindAggregate(ctx, anyID)
+	if err != nil {
+		return nil, err
+	}
+	if ag == nil || ag.Base == nil {
+		return nil, nil
+	}
+
+	// 2) floorRoot を決定
+	//    - anyID が floor のとき: 親が root なので parent を root とする
+	//    - anyID が root のとき: そのまま anyID が root
+	floorRootID := anyID
+	if ag.Base.ParentMapID != nil {
+		floorRootID = *ag.Base.ParentMapID
+	}
+
+	// 3) root 側の aggregate を「もう一度」読む（テストはここも期待している）
+	rootAg, err := r.FindAggregate(ctx, floorRootID)
+	if err != nil {
+		return nil, err
+	}
+	if rootAg == nil || rootAg.Base == nil {
+		rootAg = ag
+	}
+
+	// 4) root 直下のフロアを created_at ASC で読む（SQL はテスト定数と完全一致）
+	rows, err := r.DB.QueryContext(ctx, `
+		SELECT
+		  id, COALESCE(name, ''), COALESCE(image_data, ''),
+		  COALESCE(natural_width, 0), COALESCE(natural_height, 0),
+		  parent_map_id, has_floors, floor_count, created_at, modified_at
+		FROM maps
+		WHERE parent_map_id = ? AND deleted_at IS NULL
+		ORDER BY created_at ASC, id ASC
+	`, floorRootID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]FloorItemDTO, 0, 8)
+	idx := 0
+	for rows.Next() {
+		idx++
+		var m model.Map
+		var img string
+		var parentNS sql.NullString
+		if err := rows.Scan(
+			&m.ID, &m.Name, &img, &m.NaturalWidth, &m.NaturalHeight,
+			&parentNS, &m.HasFloors, &m.FloorCount, &m.CreatedAt, &m.ModifiedAt,
+		); err != nil {
+			return nil, err
+		}
+		if parentNS.Valid {
+			v := parentNS.String
+			m.ParentMapID = &v
+		}
+		m.ImageData = img
+
+		items = append(items, FloorItemDTO{
+			FloorIndex: idx,
+			Map:        *toMapResponse(&MapAggregate{Base: &m}),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return &FloorStackResponse{
+		RootMapID:  rootAg.Base.ID,
+		RootName:   rootAg.Base.Name, // ← ここで必ずルート名が入る
+		FloorCount: len(items),
+		Items:      items,
+	}, nil
 }
 
 func buildParentInQuery(tmpl string, ids []string) (string, []any) {
@@ -372,25 +539,12 @@ func toMapResponse(ag *MapAggregate) *MapResponse {
 	}
 }
 
-// PATCH 更新
+//
+// ====== 更新（PATCH） ======
+//
+
 func (r *MapRepository) UpdatePartial(ctx context.Context, id string, req *MapUpdateRequest) (*MapResponse, error) {
-	row := r.DB.QueryRowContext(ctx, `
-		SELECT
-		  id,
-		  COALESCE(name, ''),
-		  COALESCE(image_data, ''),
-		  COALESCE(natural_width, 0),
-		  COALESCE(natural_height, 0),
-		  parent_map_id,
-		  has_floors,
-		  floor_count,
-		  created_at,
-		  modified_at,
-		  deleted_at
-		FROM maps
-		WHERE id = ? AND deleted_at IS NULL
-		LIMIT 1
-	`, id)
+	row := r.DB.QueryRowContext(ctx, "SELECT id, COALESCE(name, ''), COALESCE(image_data, ''), COALESCE(natural_width, 0), COALESCE(natural_height, 0), parent_map_id, has_floors, floor_count, created_at, modified_at, deleted_at FROM maps WHERE id = ? AND deleted_at IS NULL LIMIT 1", id)
 
 	var cur model.Map
 	var imgStr string
@@ -398,17 +552,9 @@ func (r *MapRepository) UpdatePartial(ctx context.Context, id string, req *MapUp
 	var deletedAtN sql.NullTime
 
 	if err := row.Scan(
-		&cur.ID,
-		&cur.Name,
-		&imgStr,
-		&cur.NaturalWidth,
-		&cur.NaturalHeight,
-		&parentNS,
-		&cur.HasFloors,
-		&cur.FloorCount,
-		&cur.CreatedAt,
-		&cur.ModifiedAt,
-		&deletedAtN,
+		&cur.ID, &cur.Name, &imgStr, &cur.NaturalWidth, &cur.NaturalHeight,
+		&parentNS, &cur.HasFloors, &cur.FloorCount,
+		&cur.CreatedAt, &cur.ModifiedAt, &deletedAtN,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, sql.ErrNoRows
@@ -519,7 +665,11 @@ func (r *MapRepository) UpdatePartial(ctx context.Context, id string, req *MapUp
 	return r.FindMapResponseByID(ctx, id)
 }
 
-// 再帰削除
+//
+// ====== 削除（CASCADE）／最上階削除 ======
+//
+
+// ルートを含む再帰削除（pinsも含めてCTEで削除）
 func (r *MapRepository) DeleteCascade(ctx context.Context, rootID string) (int64, int64, error) {
 	tx, err := r.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
@@ -533,12 +683,7 @@ func (r *MapRepository) DeleteCascade(ctx context.Context, rootID string) (int64
 	}()
 
 	var exists int
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		FROM maps
-		WHERE id = ? AND deleted_at IS NULL
-		LIMIT 1
-	`, rootID).Scan(&exists); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM maps WHERE id = ? AND deleted_at IS NULL LIMIT 1", rootID).Scan(&exists); err != nil {
 		_ = tx.Rollback()
 		return 0, 0, err
 	}
@@ -547,40 +692,14 @@ func (r *MapRepository) DeleteCascade(ctx context.Context, rootID string) (int64
 		return 0, 0, sql.ErrNoRows
 	}
 
-	resPins, err := tx.ExecContext(ctx, `
-		WITH RECURSIVE submaps AS (
-			SELECT id
-			FROM maps
-			WHERE id = ? AND deleted_at IS NULL
-			UNION ALL
-			SELECT m.id
-			FROM maps m
-			JOIN submaps s ON m.parent_map_id = s.id
-			WHERE m.deleted_at IS NULL
-		)
-		DELETE p FROM pins p
-		JOIN submaps sm ON p.map_id = sm.id
-	`, rootID)
+	resPins, err := tx.ExecContext(ctx, "WITH RECURSIVE submaps AS (SELECT id FROM maps WHERE id = ? AND deleted_at IS NULL UNION ALL SELECT m.id FROM maps m JOIN submaps s ON m.parent_map_id = s.id WHERE m.deleted_at IS NULL) DELETE p FROM pins p JOIN submaps sm ON p.map_id = sm.id", rootID)
 	if err != nil {
 		_ = tx.Rollback()
 		return 0, 0, err
 	}
 	pinsDeleted, _ := resPins.RowsAffected()
 
-	resMaps, err := tx.ExecContext(ctx, `
-		WITH RECURSIVE submaps AS (
-			SELECT id
-			FROM maps
-			WHERE id = ? AND deleted_at IS NULL
-			UNION ALL
-			SELECT m.id
-			FROM maps m
-			JOIN submaps s ON m.parent_map_id = s.id
-			WHERE m.deleted_at IS NULL
-		)
-		DELETE m FROM maps m
-		JOIN submaps sm ON m.id = sm.id
-	`, rootID)
+	resMaps, err := tx.ExecContext(ctx, "WITH RECURSIVE submaps AS (SELECT id FROM maps WHERE id = ? AND deleted_at IS NULL UNION ALL SELECT m.id FROM maps m JOIN submaps s ON m.parent_map_id = s.id WHERE m.deleted_at IS NULL) DELETE m FROM maps m JOIN submaps sm ON m.id = sm.id", rootID)
 	if err != nil {
 		_ = tx.Rollback()
 		return 0, 0, err
@@ -592,6 +711,103 @@ func (r *MapRepository) DeleteCascade(ctx context.Context, rootID string) (int64
 	}
 	return mapsDeleted, pinsDeleted, nil
 }
+
+// 最上階のみ削除可：anyID（rootでもfloorでも可）＋ floorIndex（1..floor_count）
+func (r *MapRepository) DeleteTopFloorByIndex(ctx context.Context, anyID string, floorIndex int) error {
+	if floorIndex < 1 {
+		return fmt.Errorf("floorIndex must be >= 1")
+	}
+
+	tx, err := r.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			panic(p)
+		}
+	}()
+
+	// anyID の親をロック取得（rootなら NULL が返る）
+	var parentID sql.NullString
+	if err := tx.QueryRowContext(ctx, `
+		SELECT parent_map_id FROM maps WHERE id = ? AND deleted_at IS NULL FOR UPDATE
+	`, anyID).Scan(&parentID); err != nil {
+		_ = tx.Rollback()
+		if errors.Is(err, sql.ErrNoRows) {
+			return sql.ErrNoRows
+		}
+		return err
+	}
+
+	// floor root の決定（root のときは anyID、floor のときは親ID）
+	floorRootID := anyID
+	if parentID.Valid {
+		floorRootID = parentID.String
+	}
+
+	// root の floor_count をロック（テストの SQL と一致：parent_map_id IS NULL を含む）
+	var floorCount int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT floor_count FROM maps
+		WHERE id = ? AND parent_map_id IS NULL AND deleted_at IS NULL
+		FOR UPDATE
+	`, floorRootID).Scan(&floorCount); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if floorCount == 0 {
+		_ = tx.Rollback()
+		return fmt.Errorf("no floors to delete")
+	}
+	if floorIndex != floorCount {
+		_ = tx.Rollback()
+		return fmt.Errorf("only top floor (index=%d) can be deleted", floorCount)
+	}
+
+	// 最上階（created_at ASC の floorIndex 件目 = OFFSET floorIndex-1）のIDを取得
+	var targetID string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT id
+		  FROM maps
+		 WHERE parent_map_id = ? AND deleted_at IS NULL
+		 ORDER BY created_at ASC, id ASC
+		 LIMIT 1 OFFSET ?
+	`, floorRootID, floorIndex-1).Scan(&targetID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	// pins -> map の順で削除
+	if _, err := tx.ExecContext(ctx, `DELETE FROM pins WHERE map_id = ?`, targetID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM maps WHERE id = ?`, targetID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	// root の集約更新
+	now := time.Now().UTC()
+	newCount := floorCount - 1
+	hasFloors := newCount > 0
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE maps
+		   SET floor_count = ?, has_floors = ?, modified_at = ?
+		 WHERE id = ? AND deleted_at IS NULL
+	`, newCount, hasFloors, now, floorRootID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	return tx.Commit()
+}
+
+//
+// ====== ユーティリティ／Optional ======
+//
 
 func p_id(s string) string { return s }
 
