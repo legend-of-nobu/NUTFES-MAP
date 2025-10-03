@@ -56,13 +56,26 @@ services:
 
   nutfesmap-web:
     build:
-      context: services/nutfesmap-web
+      context: ./services/nutfesmap-web
       dockerfile: Dockerfile
-      args:
-        NEXT_PUBLIC_API_BASE_URL: http://localhost:8080
+      target: dev           # ← devステージで next dev を動かす
     container_name: nutfesmap-web
+    environment:
+      NODE_ENV: development
+      # ブラウザから叩く公開API（クライアント用）
+      NEXT_PUBLIC_API_BASE_URL: "http://localhost:8080"
+      # SSR/サーバーコンポーネント用に内部向けURLも用意（任意）
+      API_INTERNAL_BASE_URL: "http://nutfesmap-api:8080"
+      # 変更検知を安定化
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
     ports:
       - "3000:3000"
+    volumes:
+      - ./services/nutfesmap-web:/app   # ソースをマウント（必須）
+      - /app/node_modules               # コンテナ側を維持
+      - /app/.next                      # ビルドキャッシュをコンテナ側に
+    command: npm run dev -- -H 0.0.0.0
     depends_on:
       - nutfesmap-api
 
