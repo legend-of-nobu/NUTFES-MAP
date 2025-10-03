@@ -1,22 +1,17 @@
-# Next.js 用のビルドステージ
-FROM node:20-alpine AS builder
+# ---- dev ----
+FROM node:20-alpine AS dev
 WORKDIR /app
 
-COPY .env .env
+ENV NODE_ENV=development
 
+# 依存だけ先に入れてキャッシュを効かせる
 COPY package*.json ./
 RUN npm install
 
-COPY . .
-RUN npm run build
-
-# 本番用の軽量イメージ
-FROM node:20-alpine
-WORKDIR /app
-
-ENV NODE_ENV=production
-
-COPY --from=builder /app ./
+# 開発はソースをCOPYしない（↓composeでマウントするため）
+# CMDでは 0.0.0.0 バインド & ポーリング有効化
+ENV CHOKIDAR_USEPOLLING=true
+ENV WATCHPACK_POLLING=true
 
 EXPOSE 3000
-CMD ["npm", "start"]
+CMD ["npm", "run", "dev", "--", "-H", "0.0.0.0"]
