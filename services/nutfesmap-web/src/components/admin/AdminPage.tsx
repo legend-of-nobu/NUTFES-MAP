@@ -26,25 +26,33 @@ export default function AdminPage() {
   return (
     <div className="flex flex-col h-screen bg-[#f5f0dc]">
       <MapHeader mapName={selectedMap?.name ?? ''} onBack={() => setSelectedMap(null)} />
-      <AdminHeader
-        currentMapName={selectedMap?.name ?? '未選択'}
-        mode={mode}
-        onModeChange={() => setMode(mode === 'edit' ? 'user' : 'edit')}
-        onMapEdit={() => console.log('マップ編集')}
-        onStairEdit={() => console.log('階層編集')}
-      />
 
-      <Map pins={pins} onPinClick={() => {}} onAddPin={() => setShowModal(true)} />
+      <Map
+        pins={pins}
+        mode={mode} // ← ここで渡す！
+        onPinClick={() => {}}
+        onAddPin={() => setShowModal(true)}
+        header={
+          <AdminHeader
+            currentMapName={selectedMap?.name ?? '未選択'}
+            mode={mode}
+            onModeChange={() => setMode(mode === 'edit' ? 'user' : 'edit')}
+            onMapEdit={() => console.log('マップ編集')}
+            onStairAdd={() => console.log('階を追加')}
+            onStairDelete={() => console.log('階を削除')}
+          />
+        }
+      />
 
       <PinKindSelectModal
         visible={showModal}
         selected={selectedKind}
-        onSelect={(kind) => setSelectedKind(kind)} // ← 選択だけ
+        onSelect={(kind) => setSelectedKind(kind)}
         onConfirm={() => {
           console.log('選択確定:', selectedKind);
-          setShowModal(false); // ← 決定ボタンで閉じる
+          setShowModal(false);
         }}
-        onCancel={() => setShowModal(false)} // ← 閉じるボタンで閉じる
+        onCancel={() => setShowModal(false)}
       />
     </div>
   );

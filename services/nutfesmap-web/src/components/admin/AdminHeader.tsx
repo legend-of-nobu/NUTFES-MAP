@@ -21,42 +21,51 @@ export default function AdminHeader({
 }: Props) {
   return (
     <header className="flex flex-col items-start gap-3 px-4 py-3 bg-transparent">
-      {/* マップ名（黒背景＋白文字） */}
-      <div className="bg-black text-white text-sm font-semibold px-4 py-1 rounded">
+      {/* マップ名 */}
+      <div className="bg-black/70 text-white text-sm font-semibold px-4 py-1 rounded">
         {currentMapName}
       </div>
 
-      {/* ボタン群（半透明カード） */}
-      <div className="bg-white rounded-lg shadow px-4 py-3">
-        <div className="grid grid-cols-2 gap-3">
-          {/* 左上：Edit/View */}
+      {/* ボタン群 */}
+      <div className="bg-white/70 backdrop-blur-sm rounded-lg shadow px-4 py-3">
+        <div
+          className={`grid gap-3 transition-all duration-300 ${
+            mode === "edit" ? "grid-cols-2" : "grid-cols-1"
+          }`}
+        >
+          {/* 左上：Edit / View */}
           <ModeChanger mode={mode} onModeChange={onModeChange} />
 
-          {/* 右上：階を追加 */}
-          <Button
-            label="階を追加"
-            color="green"
-            onClick={onStairAdd}
-            fullWidth={false}
-            icon={<FaCirclePlus />}
-          />
+          {/* 🟡 管理者用コンポーネントは edit モードのときのみ表示 */}
+          {mode === "edit" && (
+            <>
+              {/* 右上：階を追加 */}
+              <Button
+                label="階を追加"
+                color="green"
+                onClick={onStairAdd}
+                fullWidth={false}
+                icon={<FaCirclePlus />}
+              />
 
-          {/* 左下：マップ編集 */}
-          <Button
-            label="マップ編集"
-            color="yellow"
-            onClick={onMapEdit}
-            fullWidth={false}
-          />
+              {/* 左下：マップ編集 */}
+              <Button
+                label="マップ編集"
+                color="yellow"
+                onClick={onMapEdit}
+                fullWidth={false}
+              />
 
-          {/* 右下：階を削除 */}
-          <Button
-            label="階を削除"
-            color="red"
-            onClick={onStairDelete}
-            fullWidth={false}
-            icon={<FaCircleXmark />}
-          />
+              {/* 右下：階を削除 */}
+              <Button
+                label="階を削除"
+                color="red"
+                onClick={onStairDelete}
+                fullWidth={false}
+                icon={<FaCircleXmark />}
+              />
+            </>
+          )}
         </div>
       </div>
     </header>
