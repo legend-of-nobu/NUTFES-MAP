@@ -22,14 +22,14 @@ export default function BottomSheet() {
   return (
     <div className="relative h-screen w-full font-['Noto_Sans_JP']">
       {/* ====== 仮のマップエリア ====== */}
-      <div className=" flex items-center justify-center">
+      {/* <div className=" flex items-center justify-center">
         <button
           onClick={() => setIsOpen(true)}
           className="px-4 py-2 bg-blue-500 text-white rounded-lg shadow-md transition-transform hover:scale-105"
         >
           お化け屋敷のピン
         </button>
-      </div>
+      </div> */}
 
       <AnimatePresence>
         {isOpen && (
