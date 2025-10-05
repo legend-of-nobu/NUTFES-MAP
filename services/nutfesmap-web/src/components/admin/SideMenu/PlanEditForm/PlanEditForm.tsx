@@ -3,7 +3,7 @@ import React, { useState } from "react";
 import  PlanNameForm  from "./PlanNameForm";
 import  PlanCategoryForm  from "./PlanCategoryForm";
 import  WaitTimeForm  from "./WaitTimeForm";
-import  PlanImageForm  from "./PlanImageForm";
+import  PlanImageForm  from "./PlanImageForm/PlanImageForm";
 import  PlanExplainForm  from "./PlanExplainForm";
 import PlanClosedForm from "./PlanClosedForm";
 import { SaveButton } from "../CommonButton/SaveButton";
@@ -17,7 +17,7 @@ export const PlanEditForm: React.FC<{ onClose: () => void }> = ({ onClose }) => 
   const [waitTime, setWaitTime] = useState("");
   const [image, setImage] = useState<string | null>(null);
   const [description, setDescription] = useState("");
-  const [closed, setClosed] = useState(false); // 営業終了の状態を管理するステート
+  const [closed, setClosed] = useState(false); 
 
   return (
     <div className={styles.container}>

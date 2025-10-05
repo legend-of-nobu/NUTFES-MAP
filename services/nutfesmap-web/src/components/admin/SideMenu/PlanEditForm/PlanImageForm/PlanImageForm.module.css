@@ -29,8 +29,20 @@
   object-fit: cover;
 }
 
+.mapUploadLabel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 20px;
+  color: #b79a25;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 0.2s;
+}
 .fileInput {
     width: 100%;
+    display: none;
 }
 
 .fileinputContainer {

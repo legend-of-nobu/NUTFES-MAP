@@ -9,7 +9,6 @@
   padding: 1.5rem;
   overflow-y: auto;
 }
-
 .title {
   font-size: 1.0rem;
   font-weight: bold;
@@ -41,7 +40,7 @@
   margin-bottom: 0.1rem;
 }
 .mapImageInput {
- 
+ display: none;
     width: 100%;
     padding: 0.5rem 0.5rem;
     font-size: 0.875rem;
@@ -49,6 +48,17 @@
 }
 .mapImageUploadFormContainer {
   margin-bottom: 1rem;
+}
+.mapUploadLabel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 20px;
+  color: #b79a25;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 0.2s;
 }
 
 .previewWrapper {

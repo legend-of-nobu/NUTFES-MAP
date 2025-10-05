@@ -1,5 +1,6 @@
 "use client";
 import React, { ChangeEvent } from "react";
+import { Upload } from "lucide-react";
 import styles from "./PlanImageForm.module.css"; 
 
 type UploadPlanImageProps = {
@@ -19,11 +20,17 @@ export default function UploadPlanImage({ onUpload }: UploadPlanImageProps) {
   };
 
   return (
+    <div>
+     <label htmlFor="mapUpload" className={styles.mapUploadLabel}>
+        <Upload size={20} />
+        <span>マップをアップロード</span>
+      </label>
     <input
+    id="mapUpload"
       type="file"
       accept="image/*"
       onChange={handleFileChange}
       className={styles.fileInput}
-    />
+    /></div>
   );
 }

@@ -19,7 +19,7 @@ export default function PlanCategoryForm({ value, onChange }: PlanCategoryFormPr
         <option value="">選択してください</option>
         <option value="food">飲食</option>
         <option value="plan">企画</option>
-        <option value="child">子供向け</option>
+        <option value="forChild">子供向け</option>
       </select>
     </div>
   );
