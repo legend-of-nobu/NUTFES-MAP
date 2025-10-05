@@ -2,7 +2,9 @@
 import React, { useState } from "react";
 import UploadPlanImage from "./UploadPlanImage";
 import PreviewPlanImage from "./PreviewPlanImage";
-import styles from "./PlanImageForm.module.css";
+import "../../Image.css"
+import "../../FormStyle.css";
+import "../../Style.css"
 
 interface PlanImageFormProps {
   value: string | null;
@@ -18,12 +20,12 @@ export default function PlanImageForm({ value, onChange }: PlanImageFormProps) {
   };
 
   return (
-    <div className={styles.container}>
-      <label className={styles.uploadImageLabel}>マップをアップロード</label>
-      <div className={styles.fileinputContainer}>
+    <div className="mapContainer">
+      <label className="Label">マップをアップロード</label>
+      <div className="fileinputContainer">
          <UploadPlanImage onUpload={handleUpload} />
          {image && (
-            <div className={styles.previewWrapper}>
+            <div>
           <PreviewPlanImage image={image} />
             </div>
         

@@ -1,6 +1,9 @@
 "use client";
 import React from "react";
-import styles from "./PlanImageForm.module.css"; 
+import  "../../Image.css"; 
+import "../../FormStyle.css";
+import "../../Style.css"
+
 
 type PreviewPlanImageProps = {
   image: string;
@@ -8,8 +11,8 @@ type PreviewPlanImageProps = {
 
 export default function PreviewPlanImage({ image }: PreviewPlanImageProps) {
   return (
-    <div className={styles.previewContainer}>
-      <img src={image} alt="企画画像プレビュー" className={styles.preview} />
+    <div className="previewContainer">
+      <img src={image} alt="企画画像プレビュー" className="preview" />
     </div>
   );
 }

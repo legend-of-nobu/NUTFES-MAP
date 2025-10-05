@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
-import styles from "./PlanEditForm.module.css";
+import "../FormStyle.css";
+import "../Style.css";
 
 type WaitTimeFormProps = {
   value: string;
@@ -10,12 +11,12 @@ type WaitTimeFormProps = {
 export default function WaitTimeForm({ value, onChange }: WaitTimeFormProps) {
   return (
     <div>
-      <label className={styles.waitTimeLabel}>待ち時間</label>
+      <label className="Label">待ち時間</label>
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder="待ち時間を入力"
-        className={styles.waitTimeForm}
+        className="Form"
       />
     </div>
   );

@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
-import styles from "./PlanEditForm.module.css";
+import  "../FormStyle.css";
+import  "../Style.css";
 
 type PlanCategoryFormProps = {
   value: string;
@@ -10,12 +11,11 @@ type PlanCategoryFormProps = {
 export default function PlanCategoryForm({ value, onChange }: PlanCategoryFormProps) {
   return (
     <div>
-      <label className={styles.categoryLabel}>カテゴリ</label>
+      <label className="Label">カテゴリ</label>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className={styles.categorySelect}
-      >
+        className="categorySelect">
         <option value="">選択してください</option>
         <option value="food">飲食</option>
         <option value="plan">企画</option>

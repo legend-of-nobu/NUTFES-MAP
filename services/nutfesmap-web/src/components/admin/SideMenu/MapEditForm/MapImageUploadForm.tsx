@@ -1,13 +1,13 @@
 import React from "react";
-import styles from "./MapEditForm.module.css";
+import  "../Image.css";
 import { Upload } from "lucide-react"; 
 
 export const MapImageUploadForm: React.FC<{
   value: File | null;
   onChange: (file: File | null) => void;
 }> = ({ value, onChange }) => (
-  <div className={styles.mapImageUploadFormContainer}>
-     <label htmlFor="mapUpload" className={styles.mapUploadLabel}>
+  <div>
+     <label htmlFor="mapUpload" className="mapUploadLabel">
         <Upload size={20} />
         <span>マップをアップロード</span>
       </label>
@@ -16,7 +16,7 @@ export const MapImageUploadForm: React.FC<{
       type="file"
       accept="image/*"
       onChange={(e) => onChange(e.target.files?.[0] || null)}
-      className={styles.mapImageInput}
+      className="fileInput"
     />
   </div>
 );

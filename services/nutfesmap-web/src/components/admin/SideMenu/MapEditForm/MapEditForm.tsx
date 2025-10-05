@@ -5,7 +5,8 @@ import PreviewMapImage from "./PreviewMapImage";
 import { SaveButton } from "../CommonButton/SaveButton";
 import { DeleteButton } from "../CommonButton/DeleteButton";
 import { CloseButton } from "../CommonButton/CloseButton";
-import styles from "./MapEditForm.module.css";
+import "../Style.css";
+import "../Image.css";
 
 export const MapEditForm: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [mapName, setMapName] = useState("");
@@ -14,19 +15,19 @@ export const MapEditForm: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const image = mapImage ? URL.createObjectURL(mapImage) : null;
 
   return (
-    <div className={styles.container}>
+    <div className="container">
       <CloseButton onClick={onClose} />
-      <h2 className={styles.title}> マップを編集</h2>
+      <h2 className="title"> マップを編集</h2>
       <MapNameForm value={mapName} onChange={setMapName} />
-      <label className={styles.mapImageLabel}>マップ画像</label>
-      <div className={styles.fileinput}>
+      <label className="Label">マップ画像</label>
+      <div className="fileinputContainer">
         <MapImageUploadForm value={mapImage} onChange={setMapImage} />
         {image && (
-        <div className={styles.previewWrapper}>
+        <div>
           <PreviewMapImage image={image} /> 
         </div> )}
       </div>
-      <div className={styles.buttonRow}>
+      <div className="buttonRow">
       <SaveButton />
       <DeleteButton />
       </div>

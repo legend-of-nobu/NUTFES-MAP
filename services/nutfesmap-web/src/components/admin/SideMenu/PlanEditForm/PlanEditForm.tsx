@@ -9,7 +9,8 @@ import PlanClosedForm from "./PlanClosedForm";
 import { SaveButton } from "../CommonButton/SaveButton";
 import { DeleteButton } from "../CommonButton/DeleteButton";
 import { CloseButton } from "../CommonButton/CloseButton";
-import styles from "./PlanEditForm.module.css";
+import   "../FormStyle.css";
+import   "../Style.css";
 
 export const PlanEditForm: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [planName, setPlanName] = useState("");
@@ -20,9 +21,9 @@ export const PlanEditForm: React.FC<{ onClose: () => void }> = ({ onClose }) => 
   const [closed, setClosed] = useState(false); 
 
   return (
-    <div className={styles.container}>
+    <div className="container">
       <CloseButton onClick={onClose} />
-      <h2 className={styles.title}> ピンを編集</h2>
+      <h2 className="title"> ピンを編集</h2>
 
       <PlanNameForm value={planName} onChange={setPlanName} />
       <PlanCategoryForm value={category} onChange={setCategory} />
@@ -30,7 +31,7 @@ export const PlanEditForm: React.FC<{ onClose: () => void }> = ({ onClose }) => 
       <PlanClosedForm value={closed} onChange={setClosed} />
       <PlanImageForm value={image} onChange={setImage} />
       <PlanExplainForm value={description} onChange={setDescription} />
-      <div className={styles.buttonRow}>
+      <div className="buttonRow">
       <SaveButton />
       <DeleteButton />
       </div>

@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
-import styles from "./PlanEditForm.module.css";
+import "../FormStyle.css";
+import "../Style.css";
 
 type PlanNameFormProps = {
   value: string;
@@ -10,13 +11,13 @@ type PlanNameFormProps = {
 export default function PlanNameForm({ value, onChange }: PlanNameFormProps) {
   return (
     <div>
-      <label className={styles.planNameLabel}>企画名</label>
+      <label className="Label">企画名</label>
       <input
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder="企画名を入力"
-        className={styles.planNameForm}
+        className="Form"
       />
     </div>
   );

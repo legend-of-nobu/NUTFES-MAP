@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
-import styles from "./PlanEditForm.module.css";
+import  "../FormStyle.css";
+import  "../Style.css";
 
 type PlanClosedFormProps = {
   value: boolean;
@@ -9,17 +10,17 @@ type PlanClosedFormProps = {
 
 export default function PlanClosedForm({ value, onChange }: PlanClosedFormProps) {
   return (
-    <div className={styles.planClosedForm}>
-        <label className={styles.checkboxLabel}>営業状況</label>
-    <div className={styles.checkboxContainer}>
+    <div className="planClosedForm">
+        <label className="Label">営業状況</label>
+    <div className="checkboxContainer">
         
       <input
         type="checkbox"
         checked={value}
         onChange={(e) => onChange(e.target.checked)}
-        className={styles.checkbox}
+        className="checkbox"
       />
-      <label className={styles.checkboxName}>営業終了</label>
+      <label className="checkboxName">営業終了</label>
     </div>
     </div>
   );
