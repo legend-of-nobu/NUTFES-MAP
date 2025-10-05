@@ -1,0 +1,47 @@
+.saveButton {
+  background-color: #75D070;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 10px;
+  width: 100%;
+  margin-top: 10px;
+  cursor: pointer;
+}
+.saveButton:hover {
+  background-color: #64b760;
+}
+
+.deleteButton {
+  background-color: #B02F30;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 10px;
+  width: 100%;
+  margin-top: 8px;
+  cursor: pointer;
+}
+.deleteButton:hover {
+  background-color: #992929;
+}
+
+.closeButton {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 32px;
+  height: 32px;
+  background-color: black;
+  border-radius: 50%;
+  font-size: 20px;
+  font-weight: bold;
+  cursor: pointer;
+  color: #ffffff;
+  transition: color 0.2s ease;
+}
+
+.closeButton:hover {
+  color: #bbbbbb;
+}
+

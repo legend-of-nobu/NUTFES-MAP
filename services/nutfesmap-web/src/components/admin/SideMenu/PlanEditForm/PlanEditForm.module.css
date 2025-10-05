@@ -1,0 +1,125 @@
+.container {
+  position: fixed;
+  right: 0;
+  top: 0;
+  height: 100%;
+  width: 380px;
+  background-color: #FFFEF3;
+  box-shadow: -3px 0 10px rgba(0, 0, 0, 0.1);
+  padding: 1.5rem;
+  overflow-y: auto;
+}
+
+.title {
+  font-size: 1.0rem;
+  font-weight: bold;
+  margin-bottom: 1.5rem;
+}
+
+
+.planNameLabel {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 0.1rem;
+}
+.planNameForm {
+  border: 3px solid #A08702; 
+  border-radius: 0.375rem; 
+  width: 100%;
+  padding: 0.5rem 0.5rem; 
+  font-size: 0.875rem; 
+  background-color: white;
+}
+
+.categoryLabel {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #333;
+  margin-top: 1.0rem;
+  margin-bottom: 0.1rem;
+}
+.categorySelect {
+  border: 3px solid #A08702;
+  border-radius: 0.375rem; 
+  width: 100%;
+  padding: 0.5rem 0.5rem; 
+  font-size: 0.875rem; 
+  background-color: white;
+}
+
+.waitTimeLabel {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #333;
+  margin-top: 1.0rem;
+  margin-bottom: 0.1rem;
+}
+.waitTimeForm {
+  border: 3px solid #A08702; 
+  border-radius: 0.375rem; 
+  width: 100%;
+  padding: 0.5rem 0.5rem; 
+  font-size: 0.875rem; 
+  background-color: white;
+}
+
+.planClosedForm {
+  margin-top: 1.0rem;
+  margin-bottom: 1.0rem;
+}
+
+.checkboxLabel {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 0.1rem;
+}
+
+.checkboxContainer {
+  border: #A08702 3px solid;
+  border-radius: 0.375rem;
+  padding: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background-color: white;
+}
+
+.checkboxName {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+  font-size: 1.0rem;
+}
+
+.planExplainForm {
+  border: 3px solid #A08702; 
+  border-radius: 0.375rem; 
+  width: 100%;
+  padding: 0.75rem 0.5rem; 
+  font-size: 0.875rem;
+  background-color: white;
+  resize: none;
+}
+
+.planExplainLabel {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 0.1rem;
+}
+
+.buttonRow {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 1rem;
+}

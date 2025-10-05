@@ -1,0 +1,41 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem; 
+  margin-bottom: 1rem;
+}
+
+.uploadImageLabel {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #333;
+}
+
+.previewWrapper {
+  margin-top: 0.5rem;
+  border-radius: 8px;
+  padding: 4px;
+  background-color: #fafafa;
+}
+.preview-container {
+  margin-top: 0.5rem;
+}
+
+.preview-image {
+  border-radius: 0.375rem; 
+  border: 1px solid #d1d5db; 
+  width: 100%;
+  max-height: 12rem;
+  object-fit: cover;
+}
+
+.fileInput {
+    width: 100%;
+}
+
+.fileinputContainer {
+  border: 3px solid #A08702; 
+  border-radius: 0.375rem; 
+  padding: 0.5rem;
+  background-color: white;
+}
