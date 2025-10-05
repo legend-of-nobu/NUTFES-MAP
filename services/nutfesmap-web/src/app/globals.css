@@ -1,15 +1,14 @@
 /* -----------------------------
   Tailwind 基本読み込み
 ----------------------------- */
-@import "tailwindcss/preflight";
-@tailwind utilities;
+@import "tailwindcss";
 
 /* -----------------------------
   基本スタイル
 ----------------------------- */
 @layer base {
   body {
-    font-family: 'Noto Sans JP', sans-serif;
+    font-family: "Noto Sans JP", sans-serif;
   }
 }
 
@@ -19,28 +18,31 @@
 @layer utilities {
   /* テキストカラー */
   .text-main {
-    color: #A08702;
+    color: #a08702;
   }
   .text-second {
-    color: #D4C648;
+    color: #d4c648;
   }
   .text-accent {
-    color: #B02F30;
+    color: #b02f30;
   }
   .text-third {
-    color: #492B04;
+    color: #492b04;
+  }
+  .text-pin {
+    color: #8002a0;
   }
 
   /* 背景カラー */
   .bg-main {
-    background-color: #FFFEF3;
+    background-color: #fffef3;
   }
   .bg-planning-details {
-    background-color: #F1E2E2;
+    background-color: #f1e2e2;
   }
 
   /* フォント */
   .font-sans-custom {
-    font-family: 'Noto Sans JP', sans-serif;
+    font-family: "Noto Sans JP", sans-serif;
   }
 }
