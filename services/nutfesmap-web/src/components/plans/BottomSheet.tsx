@@ -6,7 +6,7 @@ import { IoCloseCircle, IoFastFood } from "react-icons/io5";
 import { VscLocation } from "react-icons/vsc";
 import { MdAccessTime } from "react-icons/md";
 
-// ====== enum定義 ======
+// ====== enum定義 =======
 enum Category {
   Food = "飲食",
   Child = "子供向け",
