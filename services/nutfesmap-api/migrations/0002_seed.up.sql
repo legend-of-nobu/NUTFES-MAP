@@ -6,6 +6,6 @@
 
 INSERT INTO `maps` (`id`, `name`, `image_data`, `parent_map_id`)
 VALUES
-  ('map_index_main_2025', '2025 NUTFES', NULL, NULL)
+  ('e58c2b6a-6f29-41be-85b9-bdfee9a04f02', 'untitled map', NULL, NULL)
 ON DUPLICATE KEY UPDATE
   `name` = VALUES(`name`);
