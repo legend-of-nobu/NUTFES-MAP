@@ -22,12 +22,12 @@ export default function AdminHeader({
   return (
     <header className="flex flex-col items-start gap-3 px-4 py-3 bg-transparent">
       {/* マップ名 */}
-      <div className="bg-black/70 text-white text-sm font-semibold px-4 py-1 rounded">
+      <div className="bg-[#000000] text-white text-sm font-semibold px-4 py-1 rounded">
         {currentMapName}
       </div>
 
       {/* ボタン群 */}
-      <div className="bg-white/70 backdrop-blur-sm rounded-lg shadow px-4 py-3">
+      <div className="bg-[#FFFFFF] backdrop-blur-sm rounded-lg shadow px-4 py-3">
         <div
           className={`grid gap-3 transition-all duration-300 ${
             mode === "edit" ? "grid-cols-2" : "grid-cols-1"
