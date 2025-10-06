@@ -1,91 +1,56 @@
-import React, { useState, useRef, useLayoutEffect } from "react";
+"use client";
 
-type PlanPinProps = {
-  name: string;
-  onClick: () => void;
+import React from "react";
+import { FaMapPin } from "react-icons/fa6";
+import { MdFamilyRestroom } from "react-icons/md";
+import { FaHamburger } from "react-icons/fa";
+import { FaBuildingColumns } from "react-icons/fa6";
+import { Category } from "@/types/enums";
+
+// --- Pin型 ---
+export type Pin = {
+  id: number;
+  top: string;
+  left: string;
+  category: Category;
+  eventName: string;
+  waitTime: number;
 };
 
-// --- 設定値 ---
-const MAX_FONT_SIZE = 12; // テキストの最大フォントサイズ(px)
-const MIN_FONT_SIZE = 5; // テキストの最小フォントサイズ(px)
-// --- ---
+// --- カテゴリアイコン ---
+const categoryIcons: Record<Category, React.ComponentType> = {
+  [Category.Food]: FaHamburger,
+  [Category.Child]: MdFamilyRestroom,
+  [Category.Plan]: FaBuildingColumns,
+};
 
-const PlanPin: React.FC<PlanPinProps> = ({ name, onClick }) => {
-  const [fontSize, setFontSize] = useState(MAX_FONT_SIZE);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const textRef = useRef<HTMLSpanElement>(null);
+type PlanPinProps = {
+  pin: Pin;
+  onClick: (pin: Pin) => void;
+};
 
-  const formattedName = name.split("\n").map((line, index, arr) => (
-    <React.Fragment key={index}>
-      {line}
-      {index < arr.length - 1 && <br />}
-    </React.Fragment>
-  ));
-
-  useLayoutEffect(() => {
-    const container = containerRef.current;
-    const text = textRef.current;
-    if (!container || !text) return;
-
-    // --- 計算ロジックの修正 ---
-    // 画面外でサイズ計算するためのクローン要素を作成
-    const tempText = text.cloneNode(true) as HTMLSpanElement;
-    tempText.style.position = "absolute";
-    tempText.style.visibility = "hidden";
-    tempText.style.wordBreak = "break-all";
-    document.body.appendChild(tempText);
-
-    let currentSize = MAX_FONT_SIZE;
-    tempText.style.fontSize = `${currentSize}px`;
-
-    // 最大フォントサイズではみ出すかチェックし、はみ出す場合のみループで最適なサイズを探す
-    if (
-      tempText.scrollHeight > container.clientHeight ||
-      tempText.scrollWidth > container.clientWidth
-    ) {
-      while (currentSize > MIN_FONT_SIZE) {
-        currentSize--;
-        tempText.style.fontSize = `${currentSize}px`;
-        if (
-          tempText.scrollHeight <= container.clientHeight &&
-          tempText.scrollWidth <= container.clientWidth
-        ) {
-          break; // 収まるサイズが見つかったらループを抜ける
-        }
-      }
-    }
-
-    // 計算が終わったらクローン要素を削除し、算出したフォントサイズを適用する
-    document.body.removeChild(tempText);
-    setFontSize(currentSize);
-    // --------------------------
-  }, [name]); // nameプロパティが変更されたときに再計算する
+const PlanPin: React.FC<PlanPinProps> = ({ pin, onClick }) => {
+  const CategoryIcon = categoryIcons[pin.category];
 
   return (
     <div
-      onClick={onClick}
-      className="relative cursor-pointer w-[80px] h-[67px] -translate-x-1/2 -translate-y-full"
+      style={{ position: "absolute", top: pin.top, left: pin.left }}
+      onClick={() => onClick(pin)}
+      className="cursor-pointer"
     >
-      <img
-        src="/fan.svg"
-        alt="企画ピン"
-        className="absolute top-0 left-0 w-full h-full"
-      />
-      <div
-        ref={containerRef}
-        className="absolute top-[40%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[70%] h-[40%] flex items-center justify-center"
-      >
-        <span
-          ref={textRef}
-          className="text-white font-bold text-center pointer-events-none"
-          style={{
-            fontSize: `${fontSize}px`,
-            lineHeight: "1.2",
-            wordBreak: "break-all",
-          }}
-        >
-          {formattedName}
-        </span>
+      <div className="relative flex h-[120px] w-[120px] items-center justify-center">
+        <div className="absolute right-[40px] top-[30px] z-30 flex h-5 w-5 items-center justify-center rounded-full bg-[#DC143C] text-[6px] font-bold text-white">
+          {pin.waitTime}分
+        </div>
+        <FaMapPin className="absolute text-[40px] text-[#9370DB] z-10" />
+        <div className="absolute left-1/2 top-[43%] z-20 -translate-x-1/2 -translate-y-1/2 text-[15px] text-black">
+          <CategoryIcon />
+        </div>
+        <div className="absolute top-[60px] z-20 px-1 rounded-lg border border-black bg-white min-w-[40px]">
+          <span className="block break-words text-center text-[4px] font-bold">
+            {pin.eventName}
+          </span>
+        </div>
       </div>
     </div>
   );
