@@ -162,13 +162,23 @@ echo "F1_ID=$F1_ID"
 # ===== ここからピンのテストを混在させる =====
 
 say "5) 1F にピンを3件作成（Zulu/Alpha/Mike）"
-PIN_A_JSON="$(create_pin "$F1_ID" '{"name":"Zulu","xNorm":0.6,"yNorm":0.1,"category":"other","type":"exhibit","status":"open"}')"
-PIN_B_JSON="$(create_pin "$F1_ID" "{\"name\":\"Alpha\",\"xNorm\":0.2,\"yNorm\":0.3,\"category\":\"service\",\"type\":\"info\",\"status\":\"paused\",\"waitMinutes\":3}")"
+# ENUMに合わせてcategory/typeを修正：
+# - Zulu: plan/exhibit
+# - Alpha: child/exhibit（paused, wait=3）
+# - Mike: food/area_selector（linkToMapId 付き）
+PIN_A_JSON="$(create_pin "$F1_ID" '{"name":"Zulu","xNorm":0.6,"yNorm":0.1,"category":"plan","type":"exhibit","status":"open"}')"
+PIN_B_JSON="$(create_pin "$F1_ID" "{\"name\":\"Alpha\",\"xNorm\":0.2,\"yNorm\":0.3,\"category\":\"child\",\"type\":\"exhibit\",\"status\":\"paused\",\"waitMinutes\":3}")"
 PIN_C_JSON="$(create_pin "$F1_ID" "{\"name\":\"Mike\",\"xNorm\":0.4,\"yNorm\":0.8,\"category\":\"food\",\"type\":\"area_selector\",\"linkToMapId\":\"$OUTDOOR_ID\",\"description\":\"屋外への誘導\",\"descriptionImageData\":\"$B64_IMG\"}")"
 
 PIN_A_ID="$(echo "$PIN_A_JSON" | jq -r '.id')"
 PIN_B_ID="$(echo "$PIN_B_JSON" | jq -r '.id')"
 PIN_C_ID="$(echo "$PIN_C_JSON" | jq -r '.id')"
+
+# 失敗時にボディを表示して即終了（デバッグ用）
+[ "$PIN_A_ID" = "null" ] && { echo "Create Zulu failed:"; echo "$PIN_A_JSON" | jq .; exit 1; }
+[ "$PIN_B_ID" = "null" ] && { echo "Create Alpha failed:"; echo "$PIN_B_JSON" | jq .; exit 1; }
+[ "$PIN_C_ID" = "null" ] && { echo "Create Mike failed:";  echo "$PIN_C_JSON" | jq .; exit 1; }
+
 assert_nonempty "$PIN_A_ID" "PIN_A_ID"
 assert_nonempty "$PIN_B_ID" "PIN_B_ID"
 assert_nonempty "$PIN_C_ID" "PIN_C_ID"

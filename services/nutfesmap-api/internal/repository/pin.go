@@ -17,11 +17,11 @@ type PinCreateRequest struct {
 	Name             string  `json:"name"`                           // required
 	Description      *string `json:"description,omitempty"`          // optional
 	DescriptionImage *string `json:"descriptionImageData,omitempty"` // optional (base64)
-	Type             *string `json:"type,omitempty"`                 // enum: area_selector/exhibit/service/info (default: exhibit)
+	Type             *string `json:"type,omitempty"`                 // enum: area_selector/exhibit(default: exhibit)
 	LinkToMapID      *string `json:"linkToMapId,omitempty"`          // optional
 	XNorm            float64 `json:"xNorm"`                          // 0..1
 	YNorm            float64 `json:"yNorm"`                          // 0..1
-	Category         string  `json:"category"`                       // enum: food/stage/exhibition/game/service/other
+	Category         string  `json:"category"`                       // enum: food/child/plan
 	Status           *string `json:"status,omitempty"`               // enum: open/paused/closed (default: open)
 	WaitMinutes      *int    `json:"waitMinutes,omitempty"`          // default 0
 }
@@ -338,7 +338,7 @@ func scanPin(s rowScanner) (*PinResponse, error) {
 
 func isValidType(s string) bool {
 	switch s {
-	case "area_selector", "exhibit", "service", "info":
+	case "area_selector", "exhibit":
 		return true
 	default:
 		return false
@@ -346,7 +346,7 @@ func isValidType(s string) bool {
 }
 func isValidCategory(s string) bool {
 	switch s {
-	case "food", "stage", "exhibition", "game", "service", "other":
+	case "food", "child", "plan":
 		return true
 	default:
 		return false
