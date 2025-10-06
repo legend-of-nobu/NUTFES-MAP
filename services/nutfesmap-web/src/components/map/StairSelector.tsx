@@ -14,7 +14,7 @@ export default function StairSelector({ floors, selectedFloor, onSelect }: Props
             key={floor}
             onClick={() => onSelect(floor)}
             className={`w-12 h-8 rounded-md text-white text-sm font-bold transition
-              ${isSelected ? "bg-[#a0a852]" : "bg-[#4a2d0a] hover:opacity-80"}
+              ${isSelected ? "bg-[#9a9f4f]" : "bg-[#492b04] hover:opacity-80"}
             `}
           >
             {floor}
