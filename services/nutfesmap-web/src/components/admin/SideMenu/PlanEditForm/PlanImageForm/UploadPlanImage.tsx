@@ -1,6 +1,6 @@
 "use client";
 import React, { ChangeEvent } from "react";
-import { Upload } from "lucide-react";
+import { HiCloudArrowUp } from "react-icons/hi2";
 import  "../../Image.css"; 
 import "../../Style.css"
 
@@ -23,7 +23,7 @@ export default function UploadPlanImage({ onUpload }: UploadPlanImageProps) {
   return (
     <div>
      <label htmlFor="mapUpload" className="mapUploadLabel">
-        <Upload size={20} />
+        <HiCloudArrowUp size={20} />
         <span>マップをアップロード</span>
       </label>
     <input

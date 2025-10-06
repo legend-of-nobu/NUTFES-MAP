@@ -28,20 +28,17 @@
 
 .closeButton {
   position: absolute;
-  top: 12px;
-  right: 12px;
+  top: 16px;
+  right: 20px;
   width: 32px;
   height: 32px;
-  background-color: black;
-  border-radius: 50%;
   font-size: 20px;
-  font-weight: bold;
   cursor: pointer;
-  color: #ffffff;
+  color: #000000;
   transition: color 0.2s ease;
 }
 
 .closeButton:hover {
-  color: #bbbbbb;
+  color: #3c3c3c;
 }
 

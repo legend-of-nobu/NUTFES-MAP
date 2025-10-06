@@ -1,6 +1,6 @@
 import React from "react";
 import  "../Image.css";
-import { Upload } from "lucide-react"; 
+import { HiCloudArrowUp } from "react-icons/hi2";
 
 export const MapImageUploadForm: React.FC<{
   value: File | null;
@@ -8,7 +8,7 @@ export const MapImageUploadForm: React.FC<{
 }> = ({ value, onChange }) => (
   <div>
      <label htmlFor="mapUpload" className="mapUploadLabel">
-        <Upload size={20} />
+        <HiCloudArrowUp size={20} />
         <span>マップをアップロード</span>
       </label>
     <input
