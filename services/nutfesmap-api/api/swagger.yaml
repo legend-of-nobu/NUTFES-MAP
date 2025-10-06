@@ -826,7 +826,7 @@ components:
           example: null
         type:
           type: string
-          enum: ["area_selector","exhibit","service","info"]
+          enum: ["area_selector","exhibit"]
           default: "exhibit"
           example: "exhibit"
         linkToMapId:
@@ -850,7 +850,7 @@ components:
           example: 0.742
         category:
           type: string
-          enum: ["food","stage","exhibition","game","service","other"]
+          enum: ["food","child", "plan"]
           example: "food"
         status:
           type: string
@@ -891,7 +891,7 @@ components:
           example: null
         type:
           type: string
-          enum: ["area_selector","exhibit","service","info"]
+          enum: ["area_selector","exhibit"]
           default: "exhibit"
           example: "exhibit"
         linkToMapId:
@@ -910,7 +910,7 @@ components:
           example: 0.74
         category:
           type: string
-          enum: ["food","stage","exhibition","game","service","other"]
+          enum: ["food","child", "plan"]
           example: "food"
         status:
           type: string
@@ -942,7 +942,7 @@ components:
           example: null
         type:
           type: string
-          enum: ["area_selector","exhibit","service","info"]
+          enum: ["area_selector","exhibit"]
           example: "exhibit"
         linkToMapId:
           type: string
@@ -960,7 +960,7 @@ components:
           example: 0.70
         category:
           type: string
-          enum: ["food","stage","exhibition","game","service","other"]
+          enum: ["food", "child", "plan"]
           example: "food"
         status:
           type: string

@@ -65,12 +65,12 @@ CREATE TABLE IF NOT EXISTS `pins` (
   `name`               VARCHAR(100) NOT NULL,
   `description`        VARCHAR(1000) NULL,
   `description_image`  LONGTEXT     NULL,            -- base64 string
-  `type`               ENUM('area_selector','exhibit','service','info')
+  `type`               ENUM('area_selector','exhibit')
                        NOT NULL DEFAULT 'exhibit',
   `link_to_map_id`     VARCHAR(36)  NULL,
   `x_norm`             DECIMAL(8,6) NOT NULL,
   `y_norm`             DECIMAL(8,6) NOT NULL,
-  `category`           ENUM('food','stage','exhibition','game','service','other') NOT NULL,
+  `category`           ENUM('food','child','plan') NOT NULL,
   `status`             ENUM('open','paused','closed') NOT NULL DEFAULT 'open',
   `wait_minutes`       INT UNSIGNED NOT NULL DEFAULT 0,
   `created_at`         DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6),

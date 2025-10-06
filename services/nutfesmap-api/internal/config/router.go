@@ -33,6 +33,7 @@ func SetupRouter(cfg *Config) *echo.Echo {
 	userRepo := &repository.UserRepository{DB: db}
 	rtRepo := &repository.RefreshTokenRepository{DB: db}
 	mapRepo := repository.NewMapRepository(db)
+	pinRepo := repository.NewPinRepository(db)
 
 	cookieCfg := handlers.CookieConf{
 		Name:     cfg.CookieNameRT,
@@ -44,6 +45,7 @@ func SetupRouter(cfg *Config) *echo.Echo {
 	authH := handlers.NewAuthHandler(userRepo, rtRepo, cfg.JWTSigningKey, cfg.AccessTokenTTLMin, cfg.RefreshTokenTTLH, cookieCfg)
 	userH := handlers.NewUserHandler(userRepo)
 	mapH := handlers.NewMapHandler(mapRepo)
+	pinH := handlers.NewPinHandler(pinRepo)
 
 	// Echo標準ミドルウェア
 	e.Use(echoMW.Logger())
@@ -110,6 +112,15 @@ func SetupRouter(cfg *Config) *echo.Echo {
 	mapsG.GET("/:mapId", mapH.Show)
 	mapsG.PATCH("/:mapId", mapH.Update)
 	mapsG.DELETE("/:mapId", mapH.Delete)
+
+	mapsG.GET("/:mapId/pins", pinH.ListByMap)    // <-- 追加: 一覧
+	mapsG.POST("/:mapId/pins", pinH.CreateOnMap) // <-- 追加: 作成
+
+	// 単体 Pin 操作（公開）
+	pinsG := e.Group("/pins", csrfMW) // <-- 追加
+	pinsG.GET("/:pinId", pinH.Show)
+	pinsG.PATCH("/:pinId", pinH.Update)
+	pinsG.DELETE("/:pinId", pinH.Delete)
 
 	// /users 認証必須
 	jwtCfg := echojwt.Config{
