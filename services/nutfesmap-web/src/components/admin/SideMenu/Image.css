@@ -1,0 +1,41 @@
+
+.uploadImageLabel {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #333;
+}
+
+.preview-container {
+  margin-top: 0.5rem;
+}
+
+.preview-image {
+  border-radius: 0.375rem; 
+  border: 1px solid #d1d5db; 
+  width: 100%;
+  max-height: 12rem;
+  object-fit: cover;
+}
+
+.mapUploadLabel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 20px;
+  color: #b79a25;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 0.2s;
+}
+.fileInput {
+    width: 100%;
+    display: none;
+}
+
+.fileinputContainer {
+  border: 3px solid #A08702; 
+  border-radius: 0.375rem; 
+  padding: 0.5rem;
+  background-color: white;
+}
