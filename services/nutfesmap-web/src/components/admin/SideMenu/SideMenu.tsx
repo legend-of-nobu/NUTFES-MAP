@@ -1,21 +1,33 @@
 "use client";
-import React from "react";
+import React, { useEffect } from "react";
 import { PlanEditForm } from "./PlanEditForm/PlanEditForm";
 import { AreaEditForm } from "./AreaEditForm/AreaEditForm";
-import { MapEditForm } from "./MapEditForm/MapEditForm";
+import { MapEditForm, type MapEditFormProps } from "./MapEditForm/MapEditForm";
 
 type SideMenuProps = {
   mode: "plan" | "area" | "map";
   onClose: () => void;
+  // AdminPage から渡す（map が未選択の場合は undefined）
+  mapEditProps?: MapEditFormProps;
 };
 
-export default function SideMenu({ mode, onClose }: SideMenuProps) {
+export default function SideMenu({ mode, onClose, mapEditProps }: SideMenuProps) {
+  // 「map」モードなのに props が無い = フォーム未初期化 → アラート表示して閉じる
+  useEffect(() => {
+    if (mode === "map" && !mapEditProps) {
+      alert("編集対象のマップが未選択です。");
+      onClose();
+    }
+  }, [mode, mapEditProps, onClose]);
+
   return (
-    <div>
-      {/* 内容切り替え */}
-      {mode === "plan" && <PlanEditForm onClose={onClose}/>}
-        {mode === "area" && <AreaEditForm onClose={onClose} />}
-      {mode === "map" && <MapEditForm onClose={onClose} />}
+    // ★ Map配下より常に最前面に来るように、z-indexを十分大きく
+    <div className="relative" style={{ zIndex: 1000 }}>
+      {mode === "plan" && <PlanEditForm onClose={onClose} />}
+      {mode === "area" && <AreaEditForm onClose={onClose} />}
+      {mode === "map" && mapEditProps && (
+        <MapEditForm {...mapEditProps} onClose={onClose} />
+      )}
     </div>
   );
 }
