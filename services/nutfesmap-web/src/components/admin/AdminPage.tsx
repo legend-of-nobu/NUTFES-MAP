@@ -5,6 +5,7 @@ import MapHeader from './MapHeader';
 import Map from './Map';
 import PinKindSelectModal from './PinKindSelectModal';
 import SideMenu from './SideMenu/SideMenu';
+import { toPreviewUrl } from './SideMenu/MapEditForm/base64'; // ★追加
 
 type MapType = { id: string; name: string; imageData?: string | null };
 type PinType = { id: string; name: string; xNorm: number; yNorm: number };
@@ -68,7 +69,7 @@ export default function AdminPage() {
         // @ts-ignore 既存の Map プロップに合わせてください
         mapId={selectedMap?.id ?? null}
         // @ts-ignore 既存の Map プロップに合わせてください
-        mapImageData={selectedMap?.imageData ?? null}
+        mapImageData={toPreviewUrl(selectedMap?.imageData ?? null)} // ★dataURL化して渡す
         header={
           <AdminHeader
             currentMapName={selectedMap?.name ?? '未選択'}
@@ -92,7 +93,8 @@ export default function AdminPage() {
               ? {
                   mapId: selectedMap.id,
                   initialName: selectedMap.name,
-                  initialImageUrl: selectedMap.imageData ?? null,
+                  // DBの imageData が not null なら Base64→dataURL 化、null なら何も処理しない
+                  initialImageUrl: toPreviewUrl(selectedMap.imageData ?? null),
                   onSaved: handleMapSaved,
                 }
               : undefined
