@@ -3,7 +3,7 @@ COMPOSE_FILE := docker-compose.yml
 DC := docker compose -f $(COMPOSE_FILE)
 
 .PHONY: up down build rebuild pull logs ps api-sh db-sh prune watch env
-.PHONY: db-wait db-rebuild migrate-rebuild db-init
+.PHONY: db-rebuild migrate-rebuild db-init
 
 
 ## 起動（全サービス）
@@ -61,41 +61,55 @@ watch:
 		echo "❌ 'docker compose watch' には v2.22.0 以上が必要です（現在: $$version）"; \
 	fi
 
-## DBコンテナをリビルドして起動（データは保持）
 db-rebuild:
 	$(DC) build --no-cache $(DB_SVC)
 	$(DC) up -d $(DB_SVC)
 
-## migrateコンテナをリビルド
 migrate-rebuild:
 	$(DC) build --no-cache $(MIGRATE_SVC)
 
-## DB初期化（全ボリューム破棄→DBのみ再構築→ヘルス待ち→マイグレーション適用）
-## データを完全に消して作り直したいときはこれ
+	# ==== デフォルト（未設定なら使われます）====
+API_SVC     ?= nutfesmap-api
+DB_SVC      ?= nutfesmap-database
+MIGRATE_SVC ?= nutfesmap-migrate
+DB_WAIT_TIMEOUT ?= 120
+
+# ==== migrate 用ターゲット ====
+.PHONY: migrate-up migrate-down migrate-down-all migrate-force migrate-create migrate-sh
+
+## 最新まで適用
+migrate-up:
+	$(DC) run --rm -e MIGRATE_CMD="up" $(MIGRATE_SVC)
+
+## 1つ戻す
+migrate-down:
+	$(DC) run --rm -e MIGRATE_CMD="down 1" $(MIGRATE_SVC)
+
+## 全部ロールバック
+migrate-down-all:
+	$(DC) run --rm -e MIGRATE_CMD="down -all" $(MIGRATE_SVC)
+
+## 強制バージョン固定（使い方: make migrate-force VERSION=202510070001）
+migrate-force:
+	@test -n "$(VERSION)" || (echo "Usage: make migrate-force VERSION=YYYYMMDDHHMM"; exit 1)
+	$(DC) run --rm -e MIGRATE_CMD="force $(VERSION)" $(MIGRATE_SVC)
+
+## 新規マイグレーション作成（使い方: make migrate-create NAME=add_users_table）
+migrate-create:
+	@test -n "$(NAME)" || (echo "Usage: make migrate-create NAME=snake_case_name"; exit 1)
+	$(DC) run --rm -e MIGRATE_CMD="create" -e CREATE_NAME="$(NAME)" $(MIGRATE_SVC)
+
+## シェルで入る
+migrate-sh:
+	$(DC) run --rm $(MIGRATE_SVC) sh || $(DC) run --rm $(MIGRATE_SVC) bash
+
+## DB初期化（全ボリューム破棄→DB再作成→待機→migrate up）
 db-init:
-	@echo "⚠️  全ボリュームを破棄してDBを初期化する（他サービスのデータも消える）"
+	@echo "⚠️ 全ボリュームを破棄してDBを初期化します（他サービスのデータも消えます）"
 	@read -p "続行しますか？ [y/N] " ans; \
 	if [ "$$ans" != "y" ] && [ "$$ans" != "Y" ]; then echo "中止"; exit 1; fi
-	# 1) すべて停止 & ボリューム破棄（DBデータを空にする）
 	$(DC) down -v
-	# 2) DBだけ先にビルド・起動
 	$(DC) up -d --build $(DB_SVC)
-	# 3) DBのヘルスチェックを待つ
-	$(MAKE) db-wait
-	# 4) スキーマ適用（golang-migrate）
+	# ← db-wait を呼ばない
 	$(MAKE) migrate-up
 	@echo "✅ DB 初期化完了"
-
-## DBが healthy になるまで待つ（healthcheck 必須）
-db-wait:
-	@echo "⏳ Waiting for $(DB_SVC) to be healthy..."
-	@cid=$$($(DC) ps -q $(DB_SVC)); \
-	if [ -z "$$cid" ]; then echo "❌ $(DB_SVC) が起動していません"; exit 1; fi; \
-	while :; do \
-		status=$$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' $$cid 2>/dev/null || true); \
-		[ "$$status" = "healthy" ] && break; \
-		[ "$$status" = "unhealthy" ] && echo "❌ DB unhealthy"; \
-		[ "$$status" = "unhealthy" ] && exit 1; \
-		printf "."; sleep 1; \
-	done; \
-	echo " OK"
