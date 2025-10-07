@@ -99,9 +99,7 @@ export const MapEditForm: React.FC<MapEditFormProps> = ({
         `${process.env.NEXT_PUBLIC_API_BASE_URL}/maps/${encodeURIComponent(mapId)}`,
         {
           method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           credentials: "include", // Cookie 認証想定
           body: JSON.stringify(payload),
         }
@@ -117,8 +115,7 @@ export const MapEditForm: React.FC<MapEditFormProps> = ({
 
       // API優先。なければ今回のpayload(=新規アップロード) or 初期(dataURL→plain)を採用
       const nextImageDataPlain: string | null =
-        data.imageData ??
-        (payload.imageData ?? dataUrlToPlainBase64(initialImageUrl));
+        data.imageData ?? (payload.imageData ?? dataUrlToPlainBase64(initialImageUrl));
 
       onSaved?.({
         id: data.id ?? mapId,

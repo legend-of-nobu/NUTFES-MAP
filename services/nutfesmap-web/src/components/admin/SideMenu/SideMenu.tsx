@@ -24,7 +24,9 @@ export default function SideMenu({ mode, onClose, mapEditProps }: SideMenuProps)
     <div>
       {mode === "plan" && <PlanEditForm onClose={onClose} />}
       {mode === "area" && <AreaEditForm onClose={onClose} />}
-      {mode === "map" && mapEditProps && <MapEditForm {...mapEditProps} onClose={onClose} />}
+      {mode === "map" && mapEditProps && (
+        <MapEditForm {...mapEditProps} onClose={onClose} />
+      )}
     </div>
   );
 }
