@@ -21,7 +21,8 @@ export default function SideMenu({ mode, onClose, mapEditProps }: SideMenuProps)
   }, [mode, mapEditProps, onClose]);
 
   return (
-    <div>
+    // ★ Map配下より常に最前面に来るように、z-indexを十分大きく
+    <div className="relative" style={{ zIndex: 1000 }}>
       {mode === "plan" && <PlanEditForm onClose={onClose} />}
       {mode === "area" && <AreaEditForm onClose={onClose} />}
       {mode === "map" && mapEditProps && (

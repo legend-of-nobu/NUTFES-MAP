@@ -50,19 +50,19 @@ export default function Map({
           src={mapImageData}
           alt="map background"
           className="absolute inset-0 w-full h-full object-contain select-none pointer-events-none"
-          style={{ zIndex: 0 }}
+          style={{ zIndex: 0 }} // 背景は最背面・クリック不可
         />
       )}
 
       {/* ピン配置（既存の見た目を維持） */}
-      <div className="absolute inset-0" style={{ zIndex: 10 }}>
+      <div className="absolute inset-0" style={{ zIndex: 1 }}>
         {pins.map((p) => (
           <Pin key={p.id} pin={p} onClick={() => onPinClick(p)} />
         ))}
       </div>
 
       {/* 左下：階層セレクタ（見た目は同一） */}
-      <div className="absolute bottom-4 left-4" style={{ zIndex: 20 }}>
+      <div className="absolute bottom-4 left-4" style={{ zIndex: 2 }}>
         <StairSelector
           floors={floors}
           selectedFloor={selectedFloor}
@@ -72,13 +72,13 @@ export default function Map({
 
       {/* 右下：ピン追加ボタン（edit時のみ） */}
       {mode === "edit" && (
-        <div className="absolute bottom-6 right-6" style={{ zIndex: 20 }}>
+        <div className="absolute bottom-6 right-6" style={{ zIndex: 2 }}>
           <AddPinButton onClick={onAddPin} />
         </div>
       )}
 
       {/* 上部：AdminHeader */}
-      <div className="absolute top-0 left-0 right-0 p-4" style={{ zIndex: 30 }}>
+      <div className="absolute top-0 left-0 right-0 p-4" style={{ zIndex: 3 }}>
         {header}
       </div>
     </div>
