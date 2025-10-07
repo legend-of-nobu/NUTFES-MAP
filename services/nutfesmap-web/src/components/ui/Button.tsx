@@ -1,5 +1,3 @@
-import "tailwindcss";
-
 type Props = {
   label: string;
   onClick: () => void;
@@ -14,13 +12,13 @@ export function Button({
   icon,
 }: Props) {
   const base =
-    "w-[120px] py-1.5 rounded-[12px] border-[3px] text-sm font-family transition flex items-center justify-center gap-1";
+    "w-[120px] py-1.5 rounded-full border text-sm font-medium transition flex items-center justify-center gap-1";
   const colors = {
     yellow:
-      "border-[#A08702] text-main hover:bg-yellow-50 bg-[#FFFCFC]",
+      "border-yellow-700 text-yellow-700 hover:bg-yellow-50 bg-white",
     green:
-      "border-[#75D070] text-[#75D070] hover:bg-green-50 bg-[#FFFCFC]",
-    red: "border-[#B02F30] text-accent hover:bg-red-50 bg-[#FFFCFC]",
+      "border-green-500 text-green-500 hover:bg-green-50 bg-white",
+    red: "border-red-500 text-red-500 hover:bg-red-50 bg-white",
   };
 
   return (
