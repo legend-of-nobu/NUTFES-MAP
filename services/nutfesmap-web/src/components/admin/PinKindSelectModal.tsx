@@ -1,10 +1,14 @@
+"use client";
+
+import React, { useEffect } from "react";
 import { FaTimes } from "react-icons/fa";
-import { useEffect } from "react";
+
+type PinKind = "area" | "plan";
 
 type Props = {
   visible: boolean;
-  selected: "area" | "plan" | null;
-  onSelect: (value: "area" | "plan") => void;
+  selected: PinKind | null;
+  onSelect: (value: PinKind) => void;
   onConfirm: () => void;
   onCancel: () => void;
 };
@@ -18,29 +22,50 @@ export default function PinKindSelectModal({
 }: Props) {
   // モーダルを開いた時に未選択なら "area" をデフォルトにする
   useEffect(() => {
-    if (visible && !selected) {
-      onSelect("area");
-    }
+    if (visible && !selected) onSelect("area");
   }, [visible, selected, onSelect]);
 
   if (!visible) return null;
 
+  const handleBackdropClick: React.MouseEventHandler<HTMLDivElement> = (e) => {
+    // ダイアログ外クリックで閉じる（中クリックは伝播抑止）
+    if (e.target === e.currentTarget) onCancel();
+  };
+
+  const handleConfirm = () => {
+    onConfirm(); // 親側で選択結果を処理
+    onCancel();  // モーダルを閉じる
+  };
+
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-black/40 z-50">
-      <div className="relative bg-[#FAF9F1] rounded-lg shadow-lg px-6 py-5 w-[280px]">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="pin-kind-title"
+      onClick={handleBackdropClick}
+    >
+      <div className="relative w-[280px] rounded-lg bg-[#FAF9F1] px-6 py-5 shadow-lg">
         {/* 閉じるボタン */}
-        <div className="flex justify-end mb-2">
+        <div className="mb-2 flex justify-end">
           <button
+            type="button"
             onClick={onCancel}
-            className="w-6 h-6 flex items-center justify-center rounded-full bg-black text-white text-xs"
+            className="flex h-6 w-6 items-center justify-center rounded-full bg-black text-xs text-white hover:opacity-85"
+            aria-label="閉じる"
           >
             <FaTimes />
           </button>
         </div>
 
+        {/* タイトル */}
+        <h2 id="pin-kind-title" className="mb-3 text-center text-base font-semibold text-black">
+          ピンの種類を選択
+        </h2>
+
         {/* ラジオボタンエリア */}
-        <div className="border-2 border-[#a08702] rounded p-3 flex flex-col gap-2 mb-4">
-          <label className="flex items-center gap-2 cursor-pointer">
+        <div className="mb-4 flex flex-col gap-2 rounded border-2 border-[#a08702] p-3">
+          <label className="flex cursor-pointer items-center gap-2">
             <input
               type="radio"
               name="pinKind"
@@ -49,10 +74,10 @@ export default function PinKindSelectModal({
               onChange={() => onSelect("area")}
               className="text-[#a08702] focus:ring-[#a08702]"
             />
-            <span className="text-black text-sm">エリア</span>
+            <span className="text-sm text-black">エリア</span>
           </label>
 
-          <label className="flex items-center gap-2 cursor-pointer">
+          <label className="flex cursor-pointer items-center gap-2">
             <input
               type="radio"
               name="pinKind"
@@ -61,17 +86,15 @@ export default function PinKindSelectModal({
               onChange={() => onSelect("plan")}
               className="text-[#a08702] focus:ring-[#a08702]"
             />
-            <span className="text-black text-sm">企画</span>
+            <span className="text-sm text-black">企画</span>
           </label>
         </div>
 
         {/* 決定ボタン */}
         <button
-          onClick={() => {
-            onConfirm();   // 親側で選択結果を処理
-            onCancel();    // モーダルを閉じる
-          }}
-          className="w-full bg-[#a08702] text-white py-2 rounded-full font-medium hover:opacity-90 transition"
+          type="button"
+          onClick={handleConfirm}
+          className="w-full rounded-full bg-[#a08702] py-2 font-medium text-white transition hover:opacity-90"
         >
           決定
         </button>

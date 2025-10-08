@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS `refresh_tokens` (
 -- 画像base64は LONGTEXT（NULL可）。name/natural_* は非NULLで既定値あり。
 CREATE TABLE IF NOT EXISTS `maps` (
   `id`             VARCHAR(36)   NOT NULL,
-  `name`           VARCHAR(255)  NOT NULL DEFAULT '',
+  `name`           VARCHAR(255)  NOT NULL DEFAULT 'untitled map',
   `image_data`     LONGTEXT      NULL,               -- base64 string（NULL許可）
   `natural_width`  INT UNSIGNED  NOT NULL DEFAULT 0,
   `natural_height` INT UNSIGNED  NOT NULL DEFAULT 0,
