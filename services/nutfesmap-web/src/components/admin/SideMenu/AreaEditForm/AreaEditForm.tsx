@@ -10,23 +10,23 @@ import "../Style.css";
 const API = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
 type CreateContext = {
-  mapId: string | null;
-  draftPos: { xNorm: number; yNorm: number } | null;
-  onCreated?: (p: ApiAreaPin) => void;
+  mapId: string | null; // 親マップ（ピンを置く側）
+  draftPos: { xNorm: number; yNorm: number } | null; // クリック確定座標
+  onCreated?: (p: ApiAreaPin) => void; // 作成結果を親へ
 };
 
 type EditPin = {
-  id: string;
-  initialName: string;
+  id: string;          // 既存ピンID
+  initialName: string; // 既存名
 };
 
 type Props = {
   onClose: () => void;
-  // 新規設置（既存機能）
+  /** 新規作成フロー（ピン設置時だけ渡ってくる） */
   context?: CreateContext;
-  // ★ 追加：既存ピンの編集
+  /** 既存ピン編集（Editモードでピンをクリック時だけ渡ってくる） */
   editPin?: EditPin;
-  // ★ 追加：編集反映
+  /** 既存ピン更新後に親へ反映（名称変更） */
   onUpdated?: (p: ApiAreaPin) => void;
 };
 
@@ -35,7 +35,6 @@ export const AreaEditForm: React.FC<Props> = ({ onClose, context, editPin, onUpd
   const [areaName, setAreaName] = useState(isEditing ? editPin!.initialName : "");
   const [saving, setSaving] = useState(false);
 
-  // 既存: 新規作成フローを使う状況では案内
   const canCreate = useMemo(
     () => !!context?.mapId && !!context?.draftPos && !isEditing,
     [context?.mapId, context?.draftPos, isEditing]
@@ -45,24 +44,84 @@ export const AreaEditForm: React.FC<Props> = ({ onClose, context, editPin, onUpd
     if (isEditing) setAreaName(editPin!.initialName);
   }, [isEditing, editPin]);
 
-  // ★ 既存ピンの名称だけ更新（PATCH /pins/{pinId}）
-  const patchExistingName = async () => {
-    if (!isEditing) return;
-    if (!areaName.trim()) {
-      alert("エリア名を入力してください。");
-      return;
+  // 新規作成
+  const createAreaPin = async () => {
+    if (!canCreate) return;
+    const parentMapId = context!.mapId!;
+    const { xNorm, yNorm } = context!.draftPos!;
+    try {
+      setSaving(true);
+
+      // 1) 遷移先用の空マップを作成
+      const mapRes = await fetch(`${API}/maps`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ name: areaName || "", parentMapId: parentMapId }),
+      });
+      if (!mapRes.ok) {
+        const t = await mapRes.text();
+        throw new Error(`POST /maps 失敗: ${mapRes.status} ${t}`);
+      }
+      const createdMap = await mapRes.json(); // { id, ... }
+      const linkToMapId: string = createdMap.id;
+
+      // 2) 親マップにエリアピンを作成（※複数形 /pins）
+      const pinRes = await fetch(`${API}/maps/${encodeURIComponent(parentMapId)}/pins`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          name: areaName || "エリア",
+          type: "area_selector",
+          linkToMapId,
+          xNorm,
+          yNorm,
+          // サーバのDTOでは category は必須なので既存と整合する値を送る
+          category: "plan",
+          status: "open",
+          waitMinutes: 0,
+        }),
+      });
+      if (!pinRes.ok) {
+        const t = await pinRes.text();
+        throw new Error(`POST /maps/${parentMapId}/pins 失敗: ${pinRes.status} ${t}`);
+      }
+      const createdPin = await pinRes.json();
+
+      const newArea: ApiAreaPin = {
+        id: createdPin.id,
+        mapId: createdPin.mapId,
+        name: createdPin.name,
+        xNorm: createdPin.xNorm,
+        yNorm: createdPin.yNorm,
+        linkToMapId: createdPin.linkToMapId ?? linkToMapId,
+      };
+
+      context?.onCreated?.(newArea);
+      onClose();
+    } catch (e) {
+      console.error(e);
+      alert("エリアピンの作成に失敗しました。ログを確認してください。");
+    } finally {
+      setSaving(false);
     }
+  };
+
+  // 既存ピン名の更新（PATCH）
+  const patchAreaPinName = async () => {
+    if (!isEditing) return;
     try {
       setSaving(true);
       const res = await fetch(`${API}/pins/${encodeURIComponent(editPin!.id)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ name: areaName.trim() }),
+        body: JSON.stringify({ name: areaName }),
       });
       if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`PATCH /pins/${editPin!.id} 失敗: ${res.status} ${text}`);
+        const t = await res.text();
+        throw new Error(`PATCH /pins/${editPin!.id} 失敗: ${res.status} ${t}`);
       }
       const p = await res.json();
       const updated: ApiAreaPin = {
@@ -77,48 +136,27 @@ export const AreaEditForm: React.FC<Props> = ({ onClose, context, editPin, onUpd
       onClose();
     } catch (e) {
       console.error(e);
-      alert("ピン名の更新に失敗しました。");
+      alert("エリアピンの更新に失敗しました。ログを確認してください。");
     } finally {
       setSaving(false);
     }
   };
 
-  // 既存機能（新規作成）は残すが、今回の要件では呼ばれません
-  const createNewAreaPin = async () => {
-    if (!canCreate) return;
-    if (!areaName.trim()) {
-      alert("エリア名を入力してください。");
-      return;
-    }
-    try {
-      setSaving(true);
-
-      // ここは従来仕様：まずマップ作成 → その mapId を linkToMapId に入れて親マップにピン作成
-      // （今回の要件では使いません。必要時にエンドポイントへ置き換えてください）
-      // --- ダミー（既存機能保持のための形だけ） ---
-      alert("現在は新規作成フローを停止中です（名称変更のみ対応）。");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const onSave = async () => {
-    if (isEditing) {
-      await patchExistingName();
-    } else {
-      await createNewAreaPin();
-    }
+  const handleSave = () => {
+    if (isEditing) return void patchAreaPinName();
+    if (canCreate) return void createAreaPin();
+    alert("必要な情報が不足しています。");
   };
 
   return (
     <div className="container">
       <CloseButton onClick={onClose} />
-      <h2 className="title">{isEditing ? "エリアピンを編集" : "ピンを編集"}</h2>
+      <h2 className="title">{isEditing ? "エリアピンを編集" : "エリアピンを作成"}</h2>
 
       <AreaNameForm value={areaName} onChange={setAreaName} />
 
       <div className="buttonRow">
-        <SaveButton onClick={onSave} disabled={saving || !areaName.trim()} />
+        <SaveButton onClick={handleSave} disabled={saving} />
         <DeleteButton />
       </div>
     </div>

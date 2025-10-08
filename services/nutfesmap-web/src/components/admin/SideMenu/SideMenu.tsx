@@ -1,9 +1,8 @@
 "use client";
 import React, { useEffect } from "react";
 import { PlanEditForm } from "./PlanEditForm/PlanEditForm";
-import { AreaEditForm } from "./AreaEditForm/AreaEditForm";
+import AreaEditForm from "./AreaEditForm/AreaEditForm";
 import { MapEditForm, type MapEditFormProps } from "./MapEditForm/MapEditForm";
-
 import type { ApiPin } from "@/components/map/PlanPin";
 import type { ApiAreaPin } from "@/components/map/AreaPin";
 
@@ -20,11 +19,10 @@ type SideMenuProps = {
   onClose: () => void;
   // map 編集
   mapEditProps?: MapEditFormProps;
-  // ★ 新規ピン設置に必要な共通情報（既存機能）
+  // 新規ピン設置に必要な共通情報
   pinContext?: PinContext;
-  // ★ 追加：既存エリアピンの編集ターゲット
-  areaEditTarget?: ApiAreaPin | null;
-  // ★ 追加：名称更新の反映
+  // 既存エリアピン編集用
+  editAreaPin?: { id: string; initialName: string } | null;
   onAreaUpdated?: (p: ApiAreaPin) => void;
 };
 
@@ -33,7 +31,7 @@ export default function SideMenu({
   onClose,
   mapEditProps,
   pinContext,
-  areaEditTarget,
+  editAreaPin,
   onAreaUpdated,
 }: SideMenuProps) {
   // 「map」モードなのに props が無い = フォーム未初期化 → アラート表示して閉じる
@@ -44,7 +42,6 @@ export default function SideMenu({
     }
   }, [mode, mapEditProps, onClose]);
 
-  // レイヤは常に最前面
   return (
     <div className="fixed top-0 right-0 bottom-0 w-[360px] bg-white shadow-2xl z-[1000] overflow-auto">
       {mode === "plan" && (
@@ -61,22 +58,15 @@ export default function SideMenu({
       {mode === "area" && (
         <AreaEditForm
           onClose={onClose}
-          // ★ 既存ピン編集か？（editPin があれば編集。なければ既存の新規設置フロー）
-          editPin={
-            areaEditTarget
-              ? { id: areaEditTarget.id, initialName: areaEditTarget.name }
-              : undefined
-          }
+          // 新規作成（placing時）に使用
+          context={{
+            mapId: pinContext?.mapId ?? null,
+            draftPos: pinContext?.draftPos ?? null,
+            onCreated: pinContext?.onAreaCreated,
+          }}
+          // 既存編集（Editモードでピンをクリック時）に使用
+          editPin={editAreaPin ?? undefined}
           onUpdated={onAreaUpdated}
-          context={
-            !areaEditTarget
-              ? {
-                  mapId: pinContext?.mapId ?? null,
-                  draftPos: pinContext?.draftPos ?? null,
-                  onCreated: pinContext?.onAreaCreated,
-                }
-              : undefined
-          }
         />
       )}
 
