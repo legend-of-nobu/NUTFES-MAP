@@ -17,7 +17,8 @@ export type MapEditFormProps = {
   onSaved?: (updated: {
     id: string;
     name: string;
-    imageData?: string | null;           // ★API仕様に合わせて“ヘッダ無しBase64”で返す
+    imageData?: string | null;           // API仕様に合わせて“ヘッダ無しBase64”で返す
+    // 必要ならここに naturalWidth/naturalHeight を足してもOK
   }) => void;
 };
 
@@ -51,6 +52,9 @@ export const MapEditForm: React.FC<MapEditFormProps> = ({
   const [mapImage, setMapImage] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // ★ 計測した自然サイズ（previewUrl から都度測定）
+  const [naturalSize, setNaturalSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+
   // プレビューURL: File優先、なければ initialImageUrl を安全化
   const previewUrl = useMemo(() => {
     if (mapImage) return URL.createObjectURL(mapImage);
@@ -64,6 +68,24 @@ export const MapEditForm: React.FC<MapEditFormProps> = ({
         URL.revokeObjectURL(previewUrl);
       }
     };
+  }, [previewUrl]);
+
+  // ★ previewUrl が変わるたびに naturalWidth/Height を測定
+  useEffect(() => {
+    if (!previewUrl) {
+      setNaturalSize({ w: 0, h: 0 });
+      return;
+    }
+    const img = new Image();
+    // 署名URLや別オリジンの可能性もあるため一応指定（dataURLやblobは不要だが害はない）
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      setNaturalSize({ w: img.naturalWidth || 0, h: img.naturalHeight || 0 });
+    };
+    img.onerror = () => {
+      setNaturalSize({ w: 0, h: 0 });
+    };
+    img.src = previewUrl;
   }, [previewUrl]);
 
   const handleSave = async () => {
@@ -82,8 +104,19 @@ export const MapEditForm: React.FC<MapEditFormProps> = ({
 
       // OAS: PATCH /maps/{mapId} の部分更新（必要な項目のみ送る）
       const payload: Record<string, any> = {};
+
+      // name の変更
       if (mapName && mapName !== initialName) payload.name = mapName;
-      if (mapImage) payload.imageData = await fileToBase64Plain(mapImage); // format: byte（Base64, ヘッダ無し）
+
+      // 画像の変更（Base64 + ★自然サイズをセット）
+      if (mapImage) {
+        payload.imageData = await fileToBase64Plain(mapImage); // format: byte（Base64, ヘッダ無し）
+        // ★ naturalWidth / naturalHeight を整数で送る
+        if (naturalSize.w > 0 && naturalSize.h > 0) {
+          payload.naturalWidth = Math.round(naturalSize.w);
+          payload.naturalHeight = Math.round(naturalSize.h);
+        }
+      }
 
       // 変更がなければ即時成功扱い（onSavedへは“plain Base64”で返す）
       if (Object.keys(payload).length === 0) {
@@ -110,7 +143,7 @@ export const MapEditForm: React.FC<MapEditFormProps> = ({
         throw new Error(`PATCH /maps/${mapId} 失敗: ${res.status} ${text}`);
       }
 
-      // 期待レスポンス: MapResponse { id, name, imageData(=plain Base64), ... }
+      // 期待レスポンス: MapResponse { id, name, imageData(=plain Base64), naturalWidth, naturalHeight, ... }
       const data = await res.json();
 
       // API優先。なければ今回のpayload(=新規アップロード) or 初期(dataURL→plain)を採用
@@ -121,6 +154,9 @@ export const MapEditForm: React.FC<MapEditFormProps> = ({
         id: data.id ?? mapId,
         name: data.name ?? mapName,
         imageData: nextImageDataPlain ?? null,
+        // 必要ならここで naturalWidth / naturalHeight も返して Admin 側を更新できる
+        // naturalWidth: data.naturalWidth ?? payload.naturalWidth ?? naturalSize.w || 0,
+        // naturalHeight: data.naturalHeight ?? payload.naturalHeight ?? naturalSize.h || 0,
       });
     } catch (e) {
       console.error(e);
@@ -145,6 +181,10 @@ export const MapEditForm: React.FC<MapEditFormProps> = ({
         {previewUrl && (
           <div>
             <PreviewMapImage image={previewUrl} />
+            {/* 計測確認用（必要なら表示を残す） */}
+            {/* <p className="mt-2 text-xs text-gray-600">
+              natural: {naturalSize.w} × {naturalSize.h}
+            </p> */}
           </div>
         )}
       </div>

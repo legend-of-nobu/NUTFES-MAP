@@ -1,86 +1,110 @@
 "use client";
-import React from "react";
-import Pin from "@/components/map/Pin";
+import React, { useEffect, useRef, useState } from "react";
+import MapImage from "@/components/map/MapImage";
+import PlanPin, { ApiPin } from "@/components/map/PlanPin";
+import type { SpotData } from "@/components/map/PlanPin";
 import StairSelector from "@/components/map/StairSelector";
 import AddPinButton from "@/components/map/AddPinButton";
-
-type PinType = {
-  id: string | number;
-  xNorm: number;
-  yNorm: number;
-  // 必要ならメタ情報をここに追加（UIは変えない）
-};
+import AreaPin, { ApiAreaPin } from "@/components/map/AreaPin";
 
 type MapProps = {
-  // 既存
-  pins?: PinType[];
-  onPinClick?: (p: PinType) => void;
+  // 企画ピン
+  pins?: ApiPin[];
+  onPlanPinSelect?: (spot: SpotData) => void;
+
+  // エリアピン
+  areaPins?: ApiAreaPin[];
+  onAreaPinSelect?: (area: ApiAreaPin) => void;
+
+  // 「＋ピン」ボタン
   onAddPin?: () => void;
+
+  // 設置モード：MapImage 内をクリックした座標を上位に返す
+  onAddPinAt?: (xNorm: number, yNorm: number) => void;
+  placing?: boolean;
+
   header?: React.ReactNode;
   mode?: "edit" | "user";
-
-  // セレクタ系（見た目は既存のまま）
   floors?: string[];
   selectedFloor?: string;
   onSelectFloor?: (floor: string) => void;
-
-  // ★AdminPageから渡される“背景画像”と“mapId”（mapIdはts的に受けるだけ）
-  mapImageData?: string | null; // dataURL（toPreviewUrl済み）
+  mapImageData?: string | null;
   mapId?: string | null;
+  naturalWidth?: number;
+  naturalHeight?: number;
 };
 
 export default function Map({
   pins = [],
-  onPinClick = () => {},
-  onAddPin = () => {},
+  onPlanPinSelect = () => {},
+  areaPins = [],
+  onAreaPinSelect = () => {},
+  onAddPin,
+  onAddPinAt,
+  placing = false,
   header = null,
   mode = "user",
   floors = ["3F", "2F", "1F"],
   selectedFloor = "2F",
   onSelectFloor = () => {},
   mapImageData = null,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   mapId = null,
+  naturalWidth = 0,
+  naturalHeight = 0,
 }: MapProps) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+
+  useEffect(() => {
+    if (!hostRef.current) return;
+    const el = hostRef.current;
+    const ro = new ResizeObserver((entries) => {
+      const cr = entries[0].contentRect;
+      setSize({ w: cr.width, h: cr.height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   return (
-    <div className="relative flex-1 bg-[#e2d7b5] overflow-hidden">
-      {/* 背景マップ画像（画像があれば全面に表示） */}
-      {mapImageData && (
-        <img
-          src={mapImageData}
-          alt="map background"
-          className="absolute inset-0 w-full h-full object-contain select-none pointer-events-none"
-          style={{ zIndex: 0 }} // 背景は最背面・クリック不可
-        />
-      )}
-
-      {/* ピン配置（既存の見た目を維持） */}
-      <div className="absolute inset-0" style={{ zIndex: 1 }}>
-        {pins.map((p) => (
-          <Pin key={p.id} pin={p} onClick={() => onPinClick(p)} />
+    <div
+      ref={hostRef}
+      className={`relative h-full flex-1 bg-[#e2d7b5] overflow-hidden ${placing ? "cursor-crosshair" : ""}`}
+    >
+      <MapImage
+        src={mapImageData ?? undefined}
+        naturalWidth={naturalWidth}
+        naturalHeight={naturalHeight}
+        containerWidth={size.w}
+        containerHeight={size.h}
+        className="absolute inset-0"
+        onAddPinAt={onAddPinAt} // ★ 設置モード中のみ AdminPage から渡される
+      >
+        {/* 企画ピン */}
+        {pins.map((pin) => (
+          <PlanPin key={pin.id} pin={pin} onSelect={onPlanPinSelect} />
         ))}
+
+        {/* エリアピン */}
+        {areaPins.map((area) => (
+          <AreaPin key={area.id} area={area} onSelect={onAreaPinSelect} />
+        ))}
+      </MapImage>
+
+      {/* 左下：階層セレクタ */}
+      <div className="absolute bottom-4 left-4 z-10">
+        <StairSelector floors={floors} selectedFloor={selectedFloor} onSelect={onSelectFloor} />
       </div>
 
-      {/* 左下：階層セレクタ（見た目は同一） */}
-      <div className="absolute bottom-4 left-4" style={{ zIndex: 2 }}>
-        <StairSelector
-          floors={floors}
-          selectedFloor={selectedFloor}
-          onSelect={onSelectFloor}
-        />
-      </div>
-
-      {/* 右下：ピン追加ボタン（edit時のみ） */}
+      {/* 右下：「＋ピン」（edit時のみ） */}
       {mode === "edit" && (
-        <div className="absolute bottom-6 right-6" style={{ zIndex: 2 }}>
+        <div className="absolute bottom-6 right-6 z-10">
           <AddPinButton onClick={onAddPin} />
         </div>
       )}
 
       {/* 上部：AdminHeader */}
-      <div className="absolute top-0 left-0 right-0 p-4" style={{ zIndex: 3 }}>
-        {header}
-      </div>
+      <div className="absolute top-0 left-0 right-0 p-4 z-10">{header}</div>
     </div>
   );
 }

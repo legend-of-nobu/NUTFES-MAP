@@ -113,3 +113,4 @@ db-init:
 	# ← db-wait を呼ばない
 	$(MAKE) migrate-up
 	@echo "✅ DB 初期化完了"
+	$(DC) up -d
