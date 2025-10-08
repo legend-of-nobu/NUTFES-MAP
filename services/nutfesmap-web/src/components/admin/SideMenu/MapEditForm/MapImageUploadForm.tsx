@@ -1,5 +1,5 @@
 import React from "react";
-import  "../Image.css";
+import "../Image.css";
 import { HiCloudArrowUp } from "react-icons/hi2";
 
 export const MapImageUploadForm: React.FC<{
@@ -7,14 +7,15 @@ export const MapImageUploadForm: React.FC<{
   onChange: (file: File | null) => void;
 }> = ({ value, onChange }) => (
   <div>
-     <label htmlFor="mapUpload" className="mapUploadLabel">
-        <HiCloudArrowUp size={20} />
-        <span>マップをアップロード</span>
-      </label>
+    <label htmlFor="mapUpload" className="mapUploadLabel">
+      <HiCloudArrowUp size={20} />
+      <span>マップをアップロード</span>
+    </label>
     <input
-    id="mapUpload"
+      id="mapUpload"
       type="file"
-      accept="image/*"
+      accept="image/png,image/svg+xml"
+      title="PNG または SVG の画像を選択してください"
       onChange={(e) => onChange(e.target.files?.[0] || null)}
       className="fileInput"
     />
