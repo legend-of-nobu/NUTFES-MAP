@@ -36,15 +36,23 @@ export default function AdminPage() {
 
   // 右側サイドメニュー
   const [sideMenuMode, setSideMenuMode] = useState<"map" | "plan" | "area" | null>(null);
+  const [mapEditTarget, setMapEditTarget] = useState<MapType | null>(null);
+
+  // ★ 追加: 既存エリアピン編集対象
+  const [areaEditTarget, setAreaEditTarget] = useState<ApiAreaPin | null>(null);
+
   const openMapEdit = () => {
     if (!selectedMap) {
       alert("編集するマップを先に選択してください。");
       return;
     }
+    setMapEditTarget(selectedMap);
     setSideMenuMode("map");
   };
   const closeSideMenu = () => {
     setSideMenuMode(null);
+    setMapEditTarget(null);
+    setAreaEditTarget(null);
     // 設置モード終了（ゴースト除去）
     setPlacingKind(null);
     setDraftPos(null);
@@ -152,29 +160,16 @@ export default function AdminPage() {
 
   // MapImage 内クリックで座標確定 → サイドメニュー起動
   const handleAddPinAt = (xNorm: number, yNorm: number) => {
-    // 既に確定済みなら無視（ゴーストは固定のまま）
     if (draftPos) return;
     if (!placingKind || !selectedMap) return;
-    setDraftPos({ xNorm, yNorm });   // ← 以降は追従停止してゴースト固定
-    setSideMenuMode(placingKind);    // "area" or "plan" を開く
+    setDraftPos({ xNorm, yNorm });
+    setSideMenuMode(placingKind); // "area" or "plan"
   };
 
   // PlanPin クリック → BottomSheet
   const handlePlanPinSelect = (spot: SpotData) => {
     setSelectedSpot(spot);
     setIsSheetOpen(true);
-  };
-
-  // AreaPin クリック → linkToMapId のマップへ遷移
-  const handleAreaPinSelect = async (area: ApiAreaPin) => {
-    if (!area.linkToMapId) return;
-    await goToMapId(area.linkToMapId);
-  };
-
-  const handleBackToParent = async () => {
-    const parentId = selectedMap?.parentMapId;
-    if (!parentId) return;
-    await goToMapId(parentId);
   };
 
   // 単一マップ取得
@@ -211,7 +206,30 @@ export default function AdminPage() {
     }
   };
 
-  // サイドメニュー経由で Area/Plan 作成完了時に配列追加
+  // ★ 修正: エリアピンをクリック → Editモードなら Area 編集サイドバー、Viewモードなら遷移
+  const handleAreaPinSelect = async (area: ApiAreaPin) => {
+    if (mode === "edit") {
+      setAreaEditTarget(area);      // 既存ピンを編集対象に
+      setSideMenuMode("area");      // AreaEdit を開く
+      return;
+    }
+    // userモードは従来どおりリンク先へ遷移
+    if (area.linkToMapId) {
+      await goToMapId(area.linkToMapId);
+    }
+  };
+
+  const handleBackToParent = async () => {
+    const parentId = selectedMap?.parentMapId;
+    if (!parentId) return;
+    await goToMapId(parentId);
+  };
+
+  // 既存エリアピンの名称更新を反映
+  const applyAreaPinUpdated = (p: ApiAreaPin) =>
+    setAreaPins((prev) => prev.map((ap) => (ap.id === p.id ? p : ap)));
+
+  // 新規作成のコールバック（既存機能は維持）
   const appendAreaPin = (p: ApiAreaPin) => setAreaPins((prev) => [...prev, p]);
   const appendPlanPin = (p: ApiPin) => setPlanPins((prev) => [...prev, p]);
 
@@ -246,13 +264,12 @@ export default function AdminPage() {
           onPlanPinSelect={handlePlanPinSelect}
           onAreaPinSelect={handleAreaPinSelect}
           onAddPin={mode === "edit" ? handleOpenPinKindModal : undefined}
-          // 設置モード：クリック確定で draftPos をセット（以降追従停止）
           onAddPinAt={placingKind ? handleAddPinAt : undefined}
           placing={!!placingKind}
           placingKind={placingKind}
-          draftPos={draftPos} // ゴースト固定用
+          draftPos={draftPos}
           mapId={selectedMap?.id ?? null}
-          mapImageData={toPreviewUrl(selectedMap?.imageData ?? null)} // ← 画像は props で受け渡し
+          mapImageData={toPreviewUrl(selectedMap?.imageData ?? null)}
           naturalWidth={selectedMap?.naturalWidth ?? 4096}
           naturalHeight={selectedMap?.naturalHeight ?? 3072}
           header={headerNode}
@@ -266,13 +283,12 @@ export default function AdminPage() {
           onClose={closeSideMenu}
           // map 編集
           mapEditProps={
-            sideMenuMode === "map" && selectedMap
+            sideMenuMode === "map" && mapEditTarget
               ? {
-                  mapId: selectedMap.id,
-                  initialName: selectedMap.name,
-                  initialImageUrl: toPreviewUrl(selectedMap.imageData ?? null),
+                  mapId: mapEditTarget.id,
+                  initialName: mapEditTarget.name,
+                  initialImageUrl: toPreviewUrl(mapEditTarget.imageData ?? null),
                   onSaved: async (updated) => {
-                    // ★ ここで保存完了後に GET して最新を反映
                     const fresh = await fetchMapById(updated.id);
                     if (fresh) {
                       setMaps((prev) =>
@@ -281,10 +297,12 @@ export default function AdminPage() {
                           : [...prev, fresh]
                       );
                       setSelectedMap((prev) =>
-                        prev && prev.id === fresh.id ? { ...prev, ...fresh } : fresh
+                        prev && prev.id === fresh.id ? { ...prev, ...fresh } : prev
+                      );
+                      setMapEditTarget((prev) =>
+                        prev && prev.id === fresh.id ? { ...prev, ...fresh } : prev
                       );
                     } else {
-                      // フォールバック：コールバック引数で最低限の反映
                       setMaps((prev) =>
                         prev.map((m) =>
                           m.id === updated.id
@@ -292,22 +310,34 @@ export default function AdminPage() {
                             : m
                         )
                       );
-                      setSelectedMap((prev) =>
-                        prev && prev.id === updated.id
-                          ? { ...prev, name: updated.name, imageData: updated.imageData ?? prev.imageData }
-                          : prev
-                      );
+                      if (selectedMap?.id === updated.id) {
+                        setSelectedMap({
+                          ...selectedMap,
+                          name: updated.name,
+                          imageData: updated.imageData ?? selectedMap.imageData,
+                        });
+                      }
+                      if (mapEditTarget?.id === updated.id) {
+                        setMapEditTarget({
+                          ...mapEditTarget,
+                          name: updated.name,
+                          imageData: updated.imageData ?? mapEditTarget.imageData,
+                        });
+                      }
                     }
                     closeSideMenu();
                   },
                 }
               : undefined
           }
-          // ピン設置用コンテキスト（保存で実ピン追加 → closeSideMenu でゴースト除去）
+          // ★ エリア編集（既存ピンの名称変更）
+          areaEditTarget={sideMenuMode === "area" ? areaEditTarget : null}
+          onAreaUpdated={applyAreaPinUpdated}
+          // ★ 既存機能（新規設置用コンテキスト）は維持
           pinContext={{
             placingKind: placingKind,
             mapId: selectedMap?.id ?? null,
-            draftPos: draftPos, // {xNorm,yNorm}
+            draftPos: draftPos,
             onAreaCreated: appendAreaPin,
             onPlanCreated: appendPlanPin,
           }}

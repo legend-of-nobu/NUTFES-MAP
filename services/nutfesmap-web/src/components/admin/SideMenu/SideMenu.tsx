@@ -20,11 +20,22 @@ type SideMenuProps = {
   onClose: () => void;
   // map 編集
   mapEditProps?: MapEditFormProps;
-  // ★ 新規ピン設置に必要な共通情報
+  // ★ 新規ピン設置に必要な共通情報（既存機能）
   pinContext?: PinContext;
+  // ★ 追加：既存エリアピンの編集ターゲット
+  areaEditTarget?: ApiAreaPin | null;
+  // ★ 追加：名称更新の反映
+  onAreaUpdated?: (p: ApiAreaPin) => void;
 };
 
-export default function SideMenu({ mode, onClose, mapEditProps, pinContext }: SideMenuProps) {
+export default function SideMenu({
+  mode,
+  onClose,
+  mapEditProps,
+  pinContext,
+  areaEditTarget,
+  onAreaUpdated,
+}: SideMenuProps) {
   // 「map」モードなのに props が無い = フォーム未初期化 → アラート表示して閉じる
   useEffect(() => {
     if (mode === "map" && !mapEditProps) {
@@ -50,17 +61,26 @@ export default function SideMenu({ mode, onClose, mapEditProps, pinContext }: Si
       {mode === "area" && (
         <AreaEditForm
           onClose={onClose}
-          context={{
-            mapId: pinContext?.mapId ?? null,
-            draftPos: pinContext?.draftPos ?? null,
-            onCreated: pinContext?.onAreaCreated,
-          }}
+          // ★ 既存ピン編集か？（editPin があれば編集。なければ既存の新規設置フロー）
+          editPin={
+            areaEditTarget
+              ? { id: areaEditTarget.id, initialName: areaEditTarget.name }
+              : undefined
+          }
+          onUpdated={onAreaUpdated}
+          context={
+            !areaEditTarget
+              ? {
+                  mapId: pinContext?.mapId ?? null,
+                  draftPos: pinContext?.draftPos ?? null,
+                  onCreated: pinContext?.onAreaCreated,
+                }
+              : undefined
+          }
         />
       )}
 
-      {mode === "map" && mapEditProps && (
-        <MapEditForm {...mapEditProps} onClose={onClose} />
-      )}
+      {mode === "map" && mapEditProps && <MapEditForm {...mapEditProps} onClose={onClose} />}
     </div>
   );
 }
