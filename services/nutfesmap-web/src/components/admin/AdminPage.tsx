@@ -103,6 +103,7 @@ export default function AdminPage() {
               descriptionImageData: p.descriptionImageData ?? null,
               type: p.type, linkToMapId: p.linkToMapId ?? null,
               xNorm: p.xNorm, yNorm: p.yNorm,
+              place: p.place ?? null,
               category: p.category ?? "plan",
               status: p.status ?? "open",
               waitMinutes: p.waitMinutes ?? 0,

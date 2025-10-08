@@ -848,6 +848,12 @@ components:
           maximum: 1
           description: "画像左上(0,0)〜右下(1,1)の正規化Y座標"
           example: 0.742
+        place:
+          type: string
+          maxLength: 255
+          nullable: true
+          description: "表示用の場所名称（任意）"
+          example: "学生ホール"
         category:
           type: string
           enum: ["food","child", "plan"]
@@ -908,6 +914,12 @@ components:
           minimum: 0
           maximum: 1
           example: 0.74
+        place:
+          type: string
+          maxLength: 255
+          nullable: true
+          description: "任意。表示用の場所名称"
+          example: "学生ホール"
         category:
           type: string
           enum: ["food","child", "plan"]
@@ -958,6 +970,12 @@ components:
           minimum: 0
           maximum: 1
           example: 0.70
+        place:
+          type: string
+          maxLength: 255
+          nullable: true
+          description: "任意。表示用の場所名称"
+          example: "学生ホール"
         category:
           type: string
           enum: ["food", "child", "plan"]

@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS `pins` (
   `link_to_map_id`     VARCHAR(36)  NULL,
   `x_norm`             DECIMAL(8,6) NOT NULL,
   `y_norm`             DECIMAL(8,6) NOT NULL,
+  `place`              VARCHAR(255) NULL,
   `category`           ENUM('food','child','plan') NOT NULL,
   `status`             ENUM('open','paused','closed') NOT NULL DEFAULT 'open',
   `wait_minutes`       INT UNSIGNED NOT NULL DEFAULT 0,

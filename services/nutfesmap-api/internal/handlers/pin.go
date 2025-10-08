@@ -92,6 +92,7 @@ func (h *PinHandler) CreateOnMap(c echo.Context) error {
 			LinkToMapID: req.LinkToMapID,
 			XNorm:       req.XNorm,
 			YNorm:       req.YNorm,
+			Place:       trimmedPtr(req.Place),
 			Category:    req.Category,
 			Status:      strOr(req.Status, "open"),
 			WaitMinutes: intOr(req.WaitMinutes, 0),
@@ -202,4 +203,15 @@ func intOr(p *int, def int) int {
 		return *p
 	}
 	return def
+}
+
+func trimmedPtr(p *string) *string {
+	if p == nil {
+		return nil
+	}
+	v := strings.TrimSpace(*p)
+	if v == "" {
+		return nil
+	}
+	return &v
 }

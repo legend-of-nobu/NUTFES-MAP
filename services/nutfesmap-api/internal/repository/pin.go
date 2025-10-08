@@ -21,6 +21,7 @@ type PinCreateRequest struct {
 	LinkToMapID      *string `json:"linkToMapId,omitempty"`          // optional
 	XNorm            float64 `json:"xNorm"`                          // 0..1
 	YNorm            float64 `json:"yNorm"`                          // 0..1
+	Place            *string `json:"place,omitempty"`                // optional
 	Category         string  `json:"category"`                       // enum: food/child/plan
 	Status           *string `json:"status,omitempty"`               // enum: open/paused/closed (default: open)
 	WaitMinutes      *int    `json:"waitMinutes,omitempty"`          // default 0
@@ -33,8 +34,9 @@ type PinUpdateRequest struct {
 	DescriptionImage OptionalNullableString `json:"descriptionImageData"`
 	Type             OptionalString         `json:"type"` // enum
 	LinkToMapID      OptionalNullableString `json:"linkToMapId"`
-	XNorm            OptionalFloat64        `json:"xNorm"`    // 0..1
-	YNorm            OptionalFloat64        `json:"yNorm"`    // 0..1
+	XNorm            OptionalFloat64        `json:"xNorm"` // 0..1
+	YNorm            OptionalFloat64        `json:"yNorm"` // 0..1
+	Place            OptionalNullableString `json:"place"`
 	Category         OptionalString         `json:"category"` // enum
 	Status           OptionalString         `json:"status"`   // enum
 	WaitMinutes      OptionalInt            `json:"waitMinutes"`
@@ -50,6 +52,7 @@ type PinResponse struct {
 	LinkToMapID      *string   `json:"linkToMapId,omitempty"`
 	XNorm            float64   `json:"xNorm"`
 	YNorm            float64   `json:"yNorm"`
+	Place            *string   `json:"place,omitempty"`
 	Category         string    `json:"category"`
 	Status           string    `json:"status"`
 	WaitMinutes      int       `json:"waitMinutes"`
@@ -68,7 +71,7 @@ func (r *PinRepository) FindByMapID(ctx context.Context, mapID string) ([]*PinRe
 	rows, err := r.DB.QueryContext(ctx, `
 		SELECT
 		  id, map_id, name, description, description_image,
-		  type, link_to_map_id, x_norm, y_norm,
+		  type, link_to_map_id, x_norm, y_norm, place,
 		  category, status, wait_minutes, created_at, modified_at
 		FROM pins
 		WHERE map_id = ? 
@@ -95,7 +98,7 @@ func (r *PinRepository) FindByID(ctx context.Context, pinID string) (*PinRespons
 	row := r.DB.QueryRowContext(ctx, `
 		SELECT
 		  id, map_id, name, description, description_image,
-		  type, link_to_map_id, x_norm, y_norm,
+		  type, link_to_map_id, x_norm, y_norm, place,
 		  category, status, wait_minutes, created_at, modified_at
 		FROM pins
 		WHERE id = ?
@@ -138,18 +141,29 @@ func (r *PinRepository) CreateOnMap(ctx context.Context, newID string, mapID str
 		wait = *req.WaitMinutes
 	}
 
+	var placeVal any
+	if req.Place != nil {
+		v := strings.TrimSpace(*req.Place)
+		if len(v) > 255 {
+			return nil, fmt.Errorf("place must be <= 255 characters")
+		}
+		if v != "" {
+			placeVal = v
+		}
+	}
+
 	// map の存在は FK で担保されるが、404 区別したければ事前チェックも可
 	now := time.Now().UTC()
 
 	_, err := r.DB.ExecContext(ctx, `
 		INSERT INTO pins (
 		  id, map_id, name, description, description_image,
-		  type, link_to_map_id, x_norm, y_norm,
+		  type, link_to_map_id, x_norm, y_norm, place,
 		  category, status, wait_minutes, created_at, modified_at
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 	`,
 		newID, mapID, req.Name, req.Description, req.DescriptionImage,
-		typ, req.LinkToMapID, req.XNorm, req.YNorm,
+		typ, req.LinkToMapID, req.XNorm, req.YNorm, placeVal,
 		req.Category, status, wait, now, now,
 	)
 	if err != nil {
@@ -228,6 +242,18 @@ func (r *PinRepository) UpdatePartial(ctx context.Context, pinID string, req *Pi
 		set = append(set, "y_norm = ?")
 		args = append(args, req.YNorm.Value)
 	}
+	if req.Place.Set {
+		if req.Place.Null || strings.TrimSpace(req.Place.Value) == "" {
+			set = append(set, "place = NULL")
+		} else {
+			v := strings.TrimSpace(req.Place.Value)
+			if len(v) > 255 {
+				return nil, fmt.Errorf("place must be <= 255 characters")
+			}
+			set = append(set, "place = ?")
+			args = append(args, v)
+		}
+	}
 	if req.Category.Set {
 		if !isValidCategory(req.Category.Value) {
 			return nil, fmt.Errorf("invalid category")
@@ -290,14 +316,14 @@ type rowScanner interface {
 func scanPin(s rowScanner) (*PinResponse, error) {
 	var (
 		id, mapID, name, typ, category, status string
-		descNS, descImgNS, linkNS              sql.NullString
+		descNS, descImgNS, linkNS, placeNS     sql.NullString
 		xn, yn                                 float64
 		wait                                   int
 		createdAt, modifiedAt                  time.Time
 	)
 	if err := s.Scan(
 		&id, &mapID, &name, &descNS, &descImgNS,
-		&typ, &linkNS, &xn, &yn,
+		&typ, &linkNS, &xn, &yn, &placeNS,
 		&category, &status, &wait, &createdAt, &modifiedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -305,7 +331,7 @@ func scanPin(s rowScanner) (*PinResponse, error) {
 		}
 		return nil, err
 	}
-	var desc, descImg, link *string
+	var desc, descImg, link, place *string
 	if descNS.Valid {
 		v := descNS.String
 		desc = &v
@@ -318,6 +344,10 @@ func scanPin(s rowScanner) (*PinResponse, error) {
 		v := linkNS.String
 		link = &v
 	}
+	if placeNS.Valid {
+		v := placeNS.String
+		place = &v
+	}
 	return &PinResponse{
 		ID:               id,
 		MapID:            mapID,
@@ -328,6 +358,7 @@ func scanPin(s rowScanner) (*PinResponse, error) {
 		LinkToMapID:      link,
 		XNorm:            xn,
 		YNorm:            yn,
+		Place:            place,
 		Category:         category,
 		Status:           status,
 		WaitMinutes:      wait,

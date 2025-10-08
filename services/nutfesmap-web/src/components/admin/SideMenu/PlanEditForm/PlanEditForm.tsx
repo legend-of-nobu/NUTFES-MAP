@@ -5,6 +5,7 @@ import PlanCategoryForm from "./PlanCategoryForm";
 import WaitTimeForm from "./WaitTimeForm";
 import PlanImageForm from "./PlanImageForm/PlanImageForm";
 import PlanExplainForm from "./PlanExplainForm";
+import PlanPlaceForm from "./PlanPlaceForm";
 import PlanClosedForm from "./PlanClosedForm";
 import { SaveButton } from "../CommonButton/SaveButton";
 import { DeleteButton } from "../CommonButton/DeleteButton";
@@ -38,6 +39,7 @@ export const PlanEditForm: React.FC<{
   const [planName, setPlanName] = useState("");
   const [category, setCategory] = useState(""); // "food" | "child" | "plan"
   const [waitTime, setWaitTime] = useState(""); // number string
+  const [place, setPlace] = useState("");
   const [image, setImage] = useState<string | null>(null); // dataURL or plain base64
   const [description, setDescription] = useState("");
   const [closed, setClosed] = useState(false);
@@ -52,6 +54,7 @@ export const PlanEditForm: React.FC<{
     setPlanName(p.name ?? "");
     setCategory(p.category ?? "plan");
     setWaitTime(String(p.waitMinutes ?? 0));
+    setPlace(p.place ?? "");
     setImage(p.descriptionImageData ?? null); // dataURLでもplainでもOK
     setDescription(p.description ?? "");
     setClosed((p.status ?? "open") === "closed");
@@ -81,6 +84,7 @@ export const PlanEditForm: React.FC<{
     try {
       setSaving(true);
 
+      const trimmedPlace = place.trim();
       const payload = {
         name: planName.trim(),
         description: description.trim() || undefined,
@@ -89,6 +93,7 @@ export const PlanEditForm: React.FC<{
         category,
         status: closed ? "closed" : "open",
         waitMinutes: Number.isFinite(Number(waitTime)) ? Number(waitTime) : 0,
+        place: trimmedPlace ? trimmedPlace : isEdit ? null : undefined,
       };
 
       if (isEdit) {
@@ -115,6 +120,7 @@ export const PlanEditForm: React.FC<{
           linkToMapId: p.linkToMapId ?? pin.linkToMapId ?? null,
           xNorm: p.xNorm ?? pin.xNorm,
           yNorm: p.yNorm ?? pin.yNorm,
+          place: p.place ?? (trimmedPlace ? trimmedPlace : null),
           category: p.category ?? category,
           status: p.status ?? (closed ? "closed" : "open"),
           waitMinutes: p.waitMinutes ?? Number(waitTime) || 0,
@@ -160,6 +166,7 @@ export const PlanEditForm: React.FC<{
         linkToMapId: p.linkToMapId ?? null,
         xNorm: p.xNorm,
         yNorm: p.yNorm,
+        place: p.place ?? (trimmedPlace ? trimmedPlace : null),
         category: p.category ?? "plan",
         status: p.status ?? "open",
         waitMinutes: p.waitMinutes ?? 0,
@@ -210,6 +217,7 @@ export const PlanEditForm: React.FC<{
       <PlanNameForm value={planName} onChange={setPlanName} />
       <PlanCategoryForm value={category} onChange={setCategory} />
       <WaitTimeForm value={waitTime} onChange={setWaitTime} />
+      <PlanPlaceForm value={place} onChange={setPlace} />
       <PlanClosedForm value={closed} onChange={setClosed} />
       <PlanImageForm value={image} onChange={setImage} />
       <PlanExplainForm value={description} onChange={setDescription} />

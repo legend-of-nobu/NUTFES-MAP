@@ -104,6 +104,7 @@ export default function Map({
           linkToMapId: null,
           xNorm: effectiveGhost.x,
           yNorm: effectiveGhost.y,
+          place: null,
           category: "plan",
           status: "open",
           waitMinutes: 0,
