@@ -69,9 +69,9 @@ export default function AdminPage() {
         const res = await fetch(`${API}/maps/index`, { credentials: "include" });
         const data = await res.json();
         const items: MapType[] =
-          Array.isArray(data?.items) ? data.items :
-          Array.isArray(data) ? data :
-          data ? [data] : [];
+          Array.isArray((data as any)?.items) ? (data as any).items :
+          Array.isArray(data) ? (data as any) :
+          data ? [data as any] : [];
         setMaps(items);
         setSelectedMap((prev) => prev ?? (items.length > 0 ? items[0] : null));
       } catch (e) {
@@ -177,20 +177,13 @@ export default function AdminPage() {
     await goToMapId(parentId);
   };
 
-  const goToMapId = async (mapId: string) => {
-    const existing = maps.find((m) => m.id === mapId);
-    if (existing) {
-      setSelectedMap(existing);
-      return;
-    }
+  // 単一マップ取得
+  const fetchMapById = async (mapId: string): Promise<MapType | null> => {
     try {
       const res = await fetch(`${API}/maps/${mapId}`, { credentials: "include" });
-      if (!res.ok) {
-        setSelectedMap({ id: mapId, name: "", parentMapId: null });
-        return;
-      }
+      if (!res.ok) return null;
       const m = await res.json();
-      const mapObj: MapType = {
+      return {
         id: m.id,
         name: m.name ?? "",
         imageData: m.imageData ?? null,
@@ -198,9 +191,22 @@ export default function AdminPage() {
         naturalHeight: m.naturalHeight ?? 0,
         parentMapId: m.parentMapId ?? null,
       };
+    } catch {
+      return null;
+    }
+  };
+
+  const goToMapId = async (mapId: string) => {
+    const existing = maps.find((m) => m.id === mapId);
+    if (existing) {
+      setSelectedMap(existing);
+      return;
+    }
+    const mapObj = await fetchMapById(mapId);
+    if (mapObj) {
       setMaps((prev) => (prev.some((x) => x.id === mapObj.id) ? prev : [...prev, mapObj]));
       setSelectedMap(mapObj);
-    } catch {
+    } else {
       setSelectedMap({ id: mapId, name: "", parentMapId: null });
     }
   };
@@ -244,9 +250,9 @@ export default function AdminPage() {
           onAddPinAt={placingKind ? handleAddPinAt : undefined}
           placing={!!placingKind}
           placingKind={placingKind}
-          draftPos={draftPos} // ★ 追加（ゴースト固定用）
+          draftPos={draftPos} // ゴースト固定用
           mapId={selectedMap?.id ?? null}
-          mapImageData={toPreviewUrl(selectedMap?.imageData ?? null)}
+          mapImageData={toPreviewUrl(selectedMap?.imageData ?? null)} // ← 画像は props で受け渡し
           naturalWidth={selectedMap?.naturalWidth ?? 4096}
           naturalHeight={selectedMap?.naturalHeight ?? 3072}
           header={headerNode}
@@ -265,33 +271,39 @@ export default function AdminPage() {
                   mapId: selectedMap.id,
                   initialName: selectedMap.name,
                   initialImageUrl: toPreviewUrl(selectedMap.imageData ?? null),
-                  onSaved: (updated) => {
-                    setMaps((prev) =>
-                      prev.map((m) =>
-                        m.id === updated.id
-                          ? {
-                              ...m,
-                              name: updated.name,
-                              imageData: updated.imageData ?? m.imageData,
-                            }
-                          : m
-                      )
-                    );
-                    setSelectedMap((prev) =>
-                      prev && prev.id === updated.id
-                        ? {
-                            ...prev,
-                            name: updated.name,
-                            imageData: updated.imageData ?? prev.imageData,
-                          }
-                        : prev
-                    );
+                  onSaved: async (updated) => {
+                    // ★ ここで保存完了後に GET して最新を反映
+                    const fresh = await fetchMapById(updated.id);
+                    if (fresh) {
+                      setMaps((prev) =>
+                        prev.some((m) => m.id === fresh.id)
+                          ? prev.map((m) => (m.id === fresh.id ? { ...m, ...fresh } : m))
+                          : [...prev, fresh]
+                      );
+                      setSelectedMap((prev) =>
+                        prev && prev.id === fresh.id ? { ...prev, ...fresh } : fresh
+                      );
+                    } else {
+                      // フォールバック：コールバック引数で最低限の反映
+                      setMaps((prev) =>
+                        prev.map((m) =>
+                          m.id === updated.id
+                            ? { ...m, name: updated.name, imageData: updated.imageData ?? m.imageData }
+                            : m
+                        )
+                      );
+                      setSelectedMap((prev) =>
+                        prev && prev.id === updated.id
+                          ? { ...prev, name: updated.name, imageData: updated.imageData ?? prev.imageData }
+                          : prev
+                      );
+                    }
                     closeSideMenu();
                   },
                 }
               : undefined
           }
-          // ★ ピン設置用コンテキスト（保存で実ピン追加 → closeSideMenu でゴースト除去）
+          // ピン設置用コンテキスト（保存で実ピン追加 → closeSideMenu でゴースト除去）
           pinContext={{
             placingKind: placingKind,
             mapId: selectedMap?.id ?? null,
