@@ -33,6 +33,7 @@ export default function AdminPage() {
 
   const [sideMenuMode, setSideMenuMode] = useState<"map" | "plan" | "area" | null>(null);
   const [editAreaTarget, setEditAreaTarget] = useState<{ id: string; initialName: string } | null>(null);
+  const [editPlanTarget, setEditPlanTarget] = useState<ApiPin | null>(null);
 
   const openMapEdit = () => {
     if (!selectedMap) {
@@ -46,6 +47,7 @@ export default function AdminPage() {
     setPlacingKind(null);
     setDraftPos(null);
     setEditAreaTarget(null);
+    setEditPlanTarget(null);
   };
 
   const [showPinKindModal, setShowPinKindModal] = useState(false);
@@ -136,7 +138,20 @@ export default function AdminPage() {
   };
 
   // PlanPin 選択
-  const handlePlanPinSelect = (spot: SpotData) => {
+  const handlePlanPinSelect = (spot: SpotData & { id?: string }) => {
+    if (mode === "edit") {
+      // 念のため、ボトムシートを閉じてからサイドメニューに切替
+      setIsSheetOpen(false);
+      setSelectedSpot(null);
+
+      const t = spot.id ? planPins.find((p) => p.id === spot.id) : undefined;
+      if (t) {
+        setEditPlanTarget(t);
+        setSideMenuMode("plan");
+        return;
+      }
+    }
+    // Userモード：従来どおりボトムシート
     setSelectedSpot(spot);
     setIsSheetOpen(true);
   };
@@ -172,19 +187,23 @@ export default function AdminPage() {
         naturalWidth: m.naturalWidth ?? 0, naturalHeight: m.naturalHeight ?? 0,
         parentMapId: m.parentMapId ?? null,
       };
-      setMaps((prev) => (prev.some((x) => x.id === mapObj.id) ? prev : [...prev, mapObj]));
-      setSelectedMap(mapObj);
+        setMaps((prev) => (prev.some((x) => x.id === mapObj.id) ? prev : [...prev, mapObj]));
+        setSelectedMap(mapObj);
     } catch {
       setSelectedMap({ id: mapId, name: "", parentMapId: null });
     }
   };
 
-  // 作成/更新反映
+  // 作成/更新/削除のローカル反映
   const appendAreaPin = (p: ApiAreaPin) => setAreaPins((prev) => [...prev, p]);
   const updateAreaPinLocal = (p: ApiAreaPin) =>
     setAreaPins((prev) => prev.map((x) => (x.id === p.id ? { ...x, name: p.name } : x)));
 
   const appendPlanPin = (p: ApiPin) => setPlanPins((prev) => [...prev, p]);
+  const updatePlanPinLocal = (p: ApiPin) =>
+    setPlanPins((prev) => prev.map((x) => (x.id === p.id ? { ...x, ...p } : x)));
+  const removePlanPinLocal = (pinId: string) =>
+    setPlanPins((prev) => prev.filter((x) => x.id !== pinId));
 
   const headerNode = useMemo(
     () => (
@@ -251,7 +270,6 @@ export default function AdminPage() {
                         ? { ...prev, name: updated.name, imageData: updated.imageData ?? prev.imageData }
                         : prev
                     );
-                    // 最新をGETして同期
                     try {
                       const res = await fetch(`${API}/maps/${updated.id}`, { credentials: "include" });
                       if (res.ok) {
@@ -264,7 +282,6 @@ export default function AdminPage() {
                     } catch {}
                     closeSideMenu();
                   },
-                  // ★追加：削除後は親マップへ遷移
                   onDeleted: async (parentMapId) => {
                     await goToMapId(parentMapId);
                     closeSideMenu();
@@ -281,6 +298,14 @@ export default function AdminPage() {
           }}
           editAreaPin={editAreaTarget}
           onAreaUpdated={updateAreaPinLocal}
+          // プラン編集の受け渡し
+          editPlanPin={editPlanTarget}
+          onPlanUpdated={(p) => {
+            updatePlanPinLocal(p);
+          }}
+          onPlanDeleted={(pinId) => {
+            removePlanPinLocal(pinId);
+          }}
         />
       )}
 

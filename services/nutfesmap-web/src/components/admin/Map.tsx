@@ -11,7 +11,8 @@ type PinKind = "plan" | "area";
 type MapProps = {
   // 企画ピン
   pins?: ApiPin[];
-  onPlanPinSelect?: (spot: PlanSpotData) => void;
+  // ★ AdminPage に id も渡せるように型を広げる（既存呼び出し側はそのまま動く）
+  onPlanPinSelect?: (spot: PlanSpotData & { id?: string }) => void;
 
   // エリアピン
   areaPins?: ApiAreaPin[];
@@ -27,7 +28,7 @@ type MapProps = {
   placing?: boolean;
   placingKind?: PinKind | null;
 
-  // ★ 追加：クリック確定後の固定座標（ある間は追従を停止してゴースト固定）
+  // クリック確定後の固定座標
   draftPos?: { xNorm: number; yNorm: number } | null;
 
   header?: React.ReactNode;
@@ -50,7 +51,7 @@ export default function Map({
   onAddPinAt,
   placing = false,
   placingKind = null,
-  draftPos = null, // ★ 追加
+  draftPos = null,
   header = null,
   mode = "user",
   floors = ["3F", "2F", "1F"],
@@ -83,9 +84,7 @@ export default function Map({
     if (!placing) setGhostPos(null);
   }, [placing]);
 
-  // === ゴーストの座標決定ロジック ===
-  // 1) placing && !draftPos: カーソル追従（ghostPos を使用）
-  // 2) placing && draftPos: クリック確定位置（draftPos を使用）
+  // === ゴーストの座標決定ロジック（既存のまま） ===
   const effectiveGhost =
     placing && placingKind
       ? draftPos
@@ -93,7 +92,6 @@ export default function Map({
         : ghostPos
       : null;
 
-  // ゴースト ピンデータ（見た目だけ・pointer-events: none）
   const ghostPlan: ApiPin | null =
     effectiveGhost && placingKind === "plan"
       ? {
@@ -144,9 +142,13 @@ export default function Map({
         placing={placing && !draftPos}
         className="absolute inset-0"
       >
-        {/* 実ピン */}
+        {/* 実ピン：onSelect に id を付加して親へ返す */}
         {pins.map((pin) => (
-          <PlanPin key={pin.id} pin={pin} onSelect={onPlanPinSelect} />
+          <PlanPin
+            key={pin.id}
+            pin={pin}
+            onSelect={(spot) => onPlanPinSelect({ ...spot, id: pin.id })}
+          />
         ))}
 
         {/* 実エリアピン */}
