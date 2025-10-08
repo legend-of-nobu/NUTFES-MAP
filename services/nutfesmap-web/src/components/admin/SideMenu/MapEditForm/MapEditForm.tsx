@@ -22,6 +22,10 @@ export type MapEditFormProps = {
     imageData?: string | null;           // API仕様に合わせて“ヘッダ無しBase64”で返す
     // 必要ならここに naturalWidth/naturalHeight を足してもOK
   }) => void;
+
+  // 削除完了後に親マップへ遷移させるためのコールバック
+  // 引数: 遷移先の parentMapId
+  onDeleted?: (parentMapId: string) => void;
 };
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
@@ -51,16 +55,17 @@ export const MapEditForm: React.FC<MapEditFormProps> = ({
   initialName = "",
   initialImageUrl = null,
   onSaved,
+  onDeleted,
 }) => {
   const [mapName, setMapName] = useState(initialName);
   const [mapImage, setMapImage] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // ★ 計測した自然サイズ（previewUrl から都度測定）
+  // 計測した自然サイズ（previewUrl から都度測定）
   const [naturalSize, setNaturalSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
 
-  // ★ 親マップの有無（= 削除可否に利用）
-  const [canDelete, setCanDelete] = useState(false);
+  // 親マップID（= 削除可否と削除後の遷移に利用）
+  const [parentMapId, setParentMapId] = useState<string | null>(null);
   const [loadingMapMeta, setLoadingMapMeta] = useState(false);
 
   // プレビューURL: File優先、なければ initialImageUrl を安全化
@@ -78,7 +83,7 @@ export const MapEditForm: React.FC<MapEditFormProps> = ({
     };
   }, [previewUrl]);
 
-  // ★ previewUrl が変わるたびに naturalWidth/Height を測定
+  // previewUrl が変わるたびに naturalWidth/Height を測定
   useEffect(() => {
     if (!previewUrl) {
       setNaturalSize({ w: 0, h: 0 });
@@ -95,10 +100,10 @@ export const MapEditForm: React.FC<MapEditFormProps> = ({
     img.src = previewUrl;
   }, [previewUrl]);
 
-  // ★ マップ詳細を取得して parentMapId の有無で canDelete を決定
+  // マップ詳細を取得して parentMapId を保持（削除可否に利用）
   useEffect(() => {
     if (!mapId) {
-      setCanDelete(false);
+      setParentMapId(null);
       return;
     }
     let abort = false;
@@ -110,20 +115,17 @@ export const MapEditForm: React.FC<MapEditFormProps> = ({
         });
         if (!res.ok) {
           console.warn("GET /maps/{mapId} 失敗:", res.status);
-          if (!abort) setCanDelete(false);
+          if (!abort) setParentMapId(null);
           return;
         }
         const data = await res.json();
-        // Swagger: MapResponse に parentMapId (nullable) がある想定
-        const deletable = !!data?.parentMapId; // null/空→削除不可, 文字列→削除可
-        if (!abort) setCanDelete(deletable);
-        // サーバ側で名称が更新されている可能性もあるので、初期名が空なら反映
+        if (!abort) setParentMapId(data?.parentMapId ?? null);
         if (!abort && !initialName && data?.name) {
           setMapName(String(data.name));
         }
       } catch (e) {
         console.error(e);
-        if (!abort) setCanDelete(false);
+        if (!abort) setParentMapId(null);
       } finally {
         if (!abort) setLoadingMapMeta(false);
       }
@@ -131,10 +133,10 @@ export const MapEditForm: React.FC<MapEditFormProps> = ({
     return () => {
       abort = true;
     };
-  }, [mapId]); // initialName はここでは依存にしない（フォームの意図した編集を壊さない）
+  }, [mapId]); // initialName は依存にしない
 
   const handleSave = async () => {
-    // 🧱 バリデーション
+    // バリデーション
     if (!mapId) {
       alert("編集対象のマップが選択されていません。");
       return;
@@ -147,40 +149,37 @@ export const MapEditForm: React.FC<MapEditFormProps> = ({
     try {
       setSaving(true);
 
-      // OAS: PATCH /maps/{mapId} の部分更新（必要な項目のみ送る）
+      // PATCH /maps/{mapId} の部分更新（必要な項目のみ送る）
       const payload: Record<string, any> = {};
 
       // name の変更
       if (mapName && mapName !== initialName) payload.name = mapName;
 
-      // 画像の変更（Base64 + ★自然サイズをセット）
+      // 画像の変更（Base64 + 自然サイズをセット）
       if (mapImage) {
-        payload.imageData = await fileToBase64Plain(mapImage); // format: byte（Base64, ヘッダ無し）
+        payload.imageData = await fileToBase64Plain(mapImage); // Base64(ヘッダ無し)
         if (naturalSize.w > 0 && naturalSize.h > 0) {
           payload.naturalWidth = Math.round(naturalSize.w);
           payload.naturalHeight = Math.round(naturalSize.h);
         }
       }
 
-      // 変更がなければ即時成功扱い（onSavedへは“plain Base64”で返す）
+      // 変更がなければ即時成功扱い
       if (Object.keys(payload).length === 0) {
         onSaved?.({
           id: mapId,
           name: mapName,
-          imageData: dataUrlToPlainBase64(initialImageUrl), // dataURL→plain
+          imageData: dataUrlToPlainBase64(initialImageUrl),
         });
         return;
       }
 
-      const res = await fetch(
-        `${API}/maps/${encodeURIComponent(mapId)}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify(payload),
-        }
-      );
+      const res = await fetch(`${API}/maps/${encodeURIComponent(mapId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload),
+      });
 
       if (!res.ok) {
         const text = await res.text();
@@ -205,21 +204,97 @@ export const MapEditForm: React.FC<MapEditFormProps> = ({
     }
   };
 
-  // ★ 削除（親がある場合のみ）
+  // 削除（親がある場合のみ）。親が Index の場合は差し替え手順を実行。
   const handleDelete = async () => {
-    if (!canDelete) return; // 念のため二重防止
+    if (!parentMapId) {
+      // ★ ここで Index Map へのアラートを明示的に表示
+      alert("Index Mapは削除できません！");
+      return;
+    }
     if (!confirm("このマップを削除しますか？この操作は取り消せません。")) return;
 
     try {
-      const res = await fetch(`${API}/maps/${encodeURIComponent(mapId)}`, {
+      // 親マップの詳細を取得して、親が Index（= さらに親が無い）か判定
+      const parentRes = await fetch(`${API}/maps/${encodeURIComponent(parentMapId)}`, {
+        credentials: "include",
+      });
+      if (!parentRes.ok) {
+        const text = await parentRes.text();
+        throw new Error(`GET /maps/${parentMapId} 失敗: ${parentRes.status} ${text}`);
+      }
+      const parent = await parentRes.json();
+      const parentIsIndex = !parent?.parentMapId;
+
+      if (parentIsIndex) {
+        // 1) 新しい空マップを作成（親を明示的に紐付け）
+        const createRes = await fetch(`${API}/maps`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ name: "untitled map", parentMapId: parentMapId }),
+        });
+        if (!createRes.ok) {
+          const text = await createRes.text();
+          throw new Error(`POST /maps 失敗: ${createRes.status} ${text}`);
+        }
+        const newMap = await createRes.json();
+        const newMapId: string = newMap?.id;
+
+        // 2) 親の pins を取得し、linkToMapId === 現在の mapId のエリアピンを探す
+        const pinsRes = await fetch(`${API}/maps/${encodeURIComponent(parentMapId)}/pins`, {
+          credentials: "include",
+        });
+        if (!pinsRes.ok) {
+          const text = await pinsRes.text();
+          throw new Error(`GET /maps/${parentMapId}/pins 失敗: ${pinsRes.status} ${text}`);
+        }
+        const pins: any[] = await pinsRes.json();
+        const linkPin = pins.find(
+          (p) => p?.type === "area_selector" && p?.linkToMapId === mapId
+        );
+
+        // 2') ピンの linkToMapId を新マップに付け替え
+        if (linkPin?.id && newMapId) {
+          const patchRes = await fetch(`${API}/pins/${encodeURIComponent(linkPin.id)}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ linkToMapId: newMapId }),
+          });
+          if (!patchRes.ok) {
+            const text = await patchRes.text();
+            throw new Error(`PATCH /pins/${linkPin.id} 失敗: ${patchRes.status} ${text}`);
+          }
+        } else {
+          console.warn("親マップ上に対象リンクピンが見つかりませんでした。");
+        }
+
+        // 3) 対象マップを削除
+        const delRes = await fetch(`${API}/maps/${encodeURIComponent(mapId)}`, {
+          method: "DELETE",
+          credentials: "include",
+        });
+        if (!delRes.ok) {
+          const text = await delRes.text();
+          throw new Error(`DELETE /maps/${mapId} 失敗: ${delRes.status} ${text}`);
+        }
+
+        // 親マップへ遷移（呼び出し元に委譲）
+        onDeleted?.(parentMapId);
+        onClose();
+        return;
+      }
+
+      // 親が Index でない場合：単純に削除して親へ戻る
+      const delRes = await fetch(`${API}/maps/${encodeURIComponent(mapId)}`, {
         method: "DELETE",
         credentials: "include",
       });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`DELETE /maps/${mapId} 失敗: ${res.status} ${text}`);
+      if (!delRes.ok) {
+        const text = await delRes.text();
+        throw new Error(`DELETE /maps/${mapId} 失敗: ${delRes.status} ${text}`);
       }
-      // 親UI更新は親側で。ここでは閉じるだけ。
+      onDeleted?.(parentMapId);
       onClose();
     } catch (e) {
       console.error(e);
@@ -228,7 +303,7 @@ export const MapEditForm: React.FC<MapEditFormProps> = ({
   };
 
   const canSave = !!mapId && !saving;
-  const disableDeleteUI = loadingMapMeta || !canDelete;
+  const disableDeleteUI = loadingMapMeta || !parentMapId; // 親が無ければ削除不可（Index）
 
   return (
     <div className="container">
@@ -246,17 +321,14 @@ export const MapEditForm: React.FC<MapEditFormProps> = ({
           </div>
         )}
       </div>
+        <div className="buttonRow">
+          <SaveButton onClick={handleSave} disabled={!canSave} />
+          <DeleteButton onClick={handleDelete} />
+        </div>
 
-      <div className="buttonRow">
-        <SaveButton onClick={handleSave} disabled={!canSave} />
-        {/* 親マップが無い場合は削除不可 */}
-        <DeleteButton onClick={handleDelete} disabled={disableDeleteUI} />
-      </div>
-
-      {/* 補足メッセージ */}
-      {!canDelete && (
+      {!parentMapId && (
         <p className="mt-2 text-xs text-gray-600">
-          親マップが存在しないマップ（ルートマップ）は削除できません。
+          親マップが存在しないマップ（ルート / Index Map）は削除できません。
         </p>
       )}
     </div>

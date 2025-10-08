@@ -125,7 +125,6 @@ export default function AdminPage() {
     setPlacingKind(selectedKind);
     setDraftPos(null);
     setShowPinKindModal(false);
-    // MapImage内クリックで draftPos を確定 → SideMenuを open
   };
 
   // MapImage 内クリックで座標確定
@@ -240,7 +239,6 @@ export default function AdminPage() {
                   initialName: selectedMap.name,
                   initialImageUrl: toPreviewUrl(selectedMap.imageData ?? null),
                   onSaved: async (updated) => {
-                    // 画像は props 経由で再描画される
                     setMaps((prev) =>
                       prev.map((m) =>
                         m.id === updated.id
@@ -253,7 +251,7 @@ export default function AdminPage() {
                         ? { ...prev, name: updated.name, imageData: updated.imageData ?? prev.imageData }
                         : prev
                     );
-                    // 保存後に最新をGETして安全に反映（ユーザ要望）
+                    // 最新をGETして同期
                     try {
                       const res = await fetch(`${API}/maps/${updated.id}`, { credentials: "include" });
                       if (res.ok) {
@@ -266,6 +264,11 @@ export default function AdminPage() {
                     } catch {}
                     closeSideMenu();
                   },
+                  // ★追加：削除後は親マップへ遷移
+                  onDeleted: async (parentMapId) => {
+                    await goToMapId(parentMapId);
+                    closeSideMenu();
+                  },
                 }
               : undefined
           }
@@ -276,7 +279,6 @@ export default function AdminPage() {
             onAreaCreated: appendAreaPin,
             onPlanCreated: appendPlanPin,
           }}
-          // 既存エリアピン編集
           editAreaPin={editAreaTarget}
           onAreaUpdated={updateAreaPinLocal}
         />
