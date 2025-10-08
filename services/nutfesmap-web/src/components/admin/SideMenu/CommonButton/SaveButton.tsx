@@ -2,8 +2,13 @@
 import React from "react";
 import styles from "./Button.module.css";
 
-export const SaveButton: React.FC<{ onClick?: () => void }> = ({ onClick }) => (
-<button className={styles.saveButton} onClick={onClick}>
-  保存
-</button>
+type Props = {
+  onClick?: () => void;
+  disabled?: boolean;
+};
+
+export const SaveButton: React.FC<Props> = ({ onClick, disabled }) => (
+  <button type="button" className={styles.saveButton} onClick={onClick} disabled={disabled}>
+    保存
+  </button>
 );

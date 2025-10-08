@@ -198,6 +198,8 @@ export default function AdminPage() {
   const appendAreaPin = (p: ApiAreaPin) => setAreaPins((prev) => [...prev, p]);
   const updateAreaPinLocal = (p: ApiAreaPin) =>
     setAreaPins((prev) => prev.map((x) => (x.id === p.id ? { ...x, name: p.name } : x)));
+  const removeAreaPinLocal = (pinId: string) =>
+    setAreaPins((prev) => prev.filter((x) => x.id !== pinId));
 
   const appendPlanPin = (p: ApiPin) => setPlanPins((prev) => [...prev, p]);
   const updatePlanPinLocal = (p: ApiPin) =>
@@ -298,6 +300,7 @@ export default function AdminPage() {
           }}
           editAreaPin={editAreaTarget}
           onAreaUpdated={updateAreaPinLocal}
+          onAreaDeleted={removeAreaPinLocal}
           // プラン編集の受け渡し
           editPlanPin={editPlanTarget}
           onPlanUpdated={(p) => {

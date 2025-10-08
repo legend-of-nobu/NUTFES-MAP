@@ -11,6 +11,11 @@
 .saveButton:hover {
   background-color: #64b760;
 }
+.saveButton:disabled {
+  background-color: #a1cea0;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
 
 .deleteButton {
   background-color: #B02F30;
@@ -24,6 +29,11 @@
 }
 .deleteButton:hover {
   background-color: #992929;
+}
+.deleteButton:disabled {
+  background-color: #c17879;
+  cursor: not-allowed;
+  opacity: 0.7;
 }
 
 .closeButton {
@@ -41,4 +51,3 @@
 .closeButton:hover {
   color: #3c3c3c;
 }
-

@@ -24,6 +24,7 @@ type SideMenuProps = {
   // 既存エリアピン編集用
   editAreaPin?: { id: string; initialName: string } | null;
   onAreaUpdated?: (p: ApiAreaPin) => void;
+  onAreaDeleted?: (pinId: string) => void;
 
   // 追加: 既存プランピン編集用
   editPlanPin?: ApiPin | null;
@@ -38,6 +39,7 @@ export default function SideMenu({
   pinContext,
   editAreaPin,
   onAreaUpdated,
+  onAreaDeleted,
   editPlanPin,
   onPlanUpdated,
   onPlanDeleted,
@@ -88,6 +90,7 @@ export default function SideMenu({
           }}
           editPin={editAreaPin ?? undefined}
           onUpdated={onAreaUpdated}
+          onDeleted={onAreaDeleted}
         />
       )}
 
