@@ -21,17 +21,19 @@ type MapImageProps = {
   pins?: PinType[];
   onPinClick?: (p: PinType) => void;
 
-  // 画像領域をクリックした時、正規化座標でコールバック
+  // 画像領域をクリックした時、正規化座標でコールバック（ピン設置）
   onAddPinAt?: (xNorm: number, yNorm: number) => void;
 
-  // ★ ゴーストピン追従のために、ポインタ位置の正規化座標を通知
+  // 設置モード中にカーソル正規化座標を通知（ゴースト追従用）
   onHoverAt?: (xNorm: number, yNorm: number) => void;
-  onHoverLeave?: () => void;
+
+  // 設置モード中はカーソル非表示などの UI 切替に利用
+  placing?: boolean;
 
   className?: string;
   style?: React.CSSProperties;
 
-  // ★ rectに一致する相対コンテナ内へ自由に children を描画（PlanPin/AreaPin/ゴースト）
+  // rectに一致する相対コンテナ内へ自由に children を描画（PlanPin/AreaPin/ゴースト等）
   children?: React.ReactNode;
 };
 
@@ -69,7 +71,7 @@ const MapImage: React.FC<MapImageProps> = ({
   onPinClick,
   onAddPinAt,
   onHoverAt,
-  onHoverLeave,
+  placing = false,
   className = "",
   style,
   children,
@@ -102,29 +104,22 @@ const MapImage: React.FC<MapImageProps> = ({
   // ビューポート内にできるだけ収まるようにパンをクランプ
   const clampPan = useCallback(
     (nextTx: number, nextTy: number, nextScale: number) => {
-      // world の表示サイズ（scale後）
       const worldW = rect.w * nextScale;
       const worldH = rect.h * nextScale;
 
-      // ビューポートサイズ
       const vpW = rect.w;
       const vpH = rect.h;
 
-      // world は viewport 内に「少なくとも」覆い被さってほしい（白地を見せない）
-      // world が viewport より小さい場合は中央寄せ
       let minX: number, maxX: number, minY: number, maxY: number;
 
       if (worldW <= vpW) {
-        // 横方向は中央寄せ、パン無効
         minX = maxX = (vpW - worldW) / 2;
       } else {
-        // world が広いときは、端がちょうど見切れる位置までを許可
         minX = vpW - worldW;
         maxX = 0;
       }
 
       if (worldH <= vpH) {
-        // 縦方向も同様
         minY = maxY = (vpH - worldH) / 2;
       } else {
         minY = vpH - worldH;
@@ -146,8 +141,6 @@ const MapImage: React.FC<MapImageProps> = ({
       if (!el) return;
 
       const vpBox = el.getBoundingClientRect();
-
-      // ビューポート内座標
       const vx = clientX - vpBox.left;
       const vy = clientY - vpBox.top;
 
@@ -155,16 +148,13 @@ const MapImage: React.FC<MapImageProps> = ({
       const wx = (vx - tx) / scale;
       const wy = (vy - ty) / scale;
 
-      // 新しいスケールを計算
       const nextScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale * zoomFactor));
 
-      // クライアント座標 (vx, vy) にある world 点 (wx, wy) が、ズーム後も同じ位置に見えるように平行移動を再計算
+      // ズーム後も同じ画素を同じ位置に
       let nextTx = vx - wx * nextScale;
       let nextTy = vy - wy * nextScale;
 
-      // クランプ
       const clamped = clampPan(nextTx, nextTy, nextScale);
-
       setScale(nextScale);
       setTx(clamped.tx);
       setTy(clamped.ty);
@@ -172,149 +162,119 @@ const MapImage: React.FC<MapImageProps> = ({
     [scale, tx, ty, clampPan]
   );
 
-  // ====== ホイールでズーム（トラックパッドにも自然に） ======
+  // ====== ホイールでズーム ======
   const onWheel = useCallback(
     (e: React.WheelEvent<HTMLDivElement>) => {
       const delta = e.deltaY;
       if (delta === 0) return;
-      const factor = Math.exp(-delta * 0.001); // 下回しで拡大，上回しで縮小
+      const factor = Math.exp(-delta * 0.001);
       zoomAt(e.clientX, e.clientY, factor);
       e.preventDefault();
     },
     [zoomAt]
   );
 
-  // ★ ポインタのクライアント座標 → 正規化座標(0..1)に変換して onHoverAt に通知
-  const notifyHover = useCallback(
-    (clientX: number, clientY: number) => {
-      if (!onHoverAt) return;
-      const vp = viewportRef.current;
-      if (!vp) return;
-
-      const vpBox = vp.getBoundingClientRect();
-      const vx = clientX - vpBox.left;
-      const vy = clientY - vpBox.top;
-
-      // world 座標（scale/translate を逆変換）
-      const wx = (vx - tx) / scale;
-      const wy = (vy - ty) / scale;
-
-      // 正規化 0..1
-      const nx = wx / rect.w;
-      const ny = wy / rect.h;
-
-      const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
-      onHoverAt(clamp01(nx), clamp01(ny));
-    },
-    [onHoverAt, rect.w, rect.h, scale, tx, ty]
-  );
-
-  // ====== ドラッグでパン（Pointer Events） & ホバー通知 ======
+  // ====== ドラッグでパン（Pointer Events） ======
   const pointers = useRef<Map<number, { x: number; y: number }>>(new Map());
   const prevPinch = useRef<{ dist: number; cx: number; cy: number } | null>(null);
+
+  const computeNormalizedAt = (clientX: number, clientY: number) => {
+    const vp = viewportRef.current;
+    if (!vp) return null;
+    const vpBox = vp.getBoundingClientRect();
+    const vx = clientX - vpBox.left;
+    const vy = clientY - vpBox.top;
+    const wx = (vx - tx) / scale;
+    const wy = (vy - ty) / scale;
+    const nx = wx / rect.w;
+    const ny = wy / rect.h;
+    const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+    return { nx: clamp01(nx), ny: clamp01(ny) };
+  };
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     (e.target as Element).setPointerCapture?.(e.pointerId);
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    notifyHover(e.clientX, e.clientY);
   };
 
   const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     pointers.current.delete(e.pointerId);
     if (pointers.current.size < 2) prevPinch.current = null;
-    notifyHover(e.clientX, e.clientY);
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    // ★ まず常にホバー座標を通知（設置モードのゴースト追従用）
+    if (onHoverAt) {
+      const pos = computeNormalizedAt(e.clientX, e.clientY);
+      if (pos) onHoverAt(pos.nx, pos.ny);
+    }
+
+    // 以下はパン/ピンチ操作（ドラッグ時のみ）
     const pts = pointers.current;
-    if (pts.has(e.pointerId)) {
-      const prev = pts.get(e.pointerId)!;
-      const dx = e.clientX - prev.x;
-      const dy = e.clientY - prev.y;
-      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (!pts.has(e.pointerId)) return;
 
-      // 2本指 → ピンチズーム
-      if (pts.size >= 2) {
-        const [p1, p2] = Array.from(pts.values());
-        const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-        const cx = (p1.x + p2.x) / 2;
-        const cy = (p1.y + p2.y) / 2;
+    const prev = pts.get(e.pointerId)!;
+    const dx = e.clientX - prev.x;
+    const dy = e.clientY - prev.y;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-        if (!prevPinch.current) {
-          prevPinch.current = { dist, cx, cy };
-          notifyHover(e.clientX, e.clientY);
-          return;
-        }
+    // 2本指 → ピンチズーム
+    if (pts.size >= 2) {
+      const [p1, p2] = Array.from(pts.values());
+      const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+      const cx = (p1.x + p2.x) / 2;
+      const cy = (p1.y + p2.y) / 2;
 
-        const { dist: prevDist, cx: prevCx, cy: prevCy } = prevPinch.current;
-        const factor = dist / prevDist || 1;
-
-        const movedCx = cx - prevCx;
-        const movedCy = cy - prevCy;
-
-        let nextTx = tx + movedCx;
-        let nextTy = ty + movedCy;
-
-        const el = viewportRef.current;
-        if (el) {
-          const vpBox = el.getBoundingClientRect();
-          const vx = cx - vpBox.left;
-          const vy = cy - vpBox.top;
-
-          const wx = (vx - nextTx) / scale;
-          const wy = (vy - nextTy) / scale;
-
-          const nextScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale * factor));
-          nextTx = vx - wx * nextScale;
-          nextTy = vy - wy * nextScale;
-
-          const clamped = clampPan(nextTx, nextTy, nextScale);
-          setScale(nextScale);
-          setTx(clamped.tx);
-          setTy(clamped.ty);
-        }
-
+      if (!prevPinch.current) {
         prevPinch.current = { dist, cx, cy };
-      } else {
-        // 1本指/マウス → パン
-        const clamped = clampPan(tx + dx, ty + dy, scale);
+        return;
+      }
+
+      const { dist: prevDist, cx: prevCx, cy: prevCy } = prevPinch.current;
+      const factor = dist / prevDist || 1;
+      const movedCx = cx - prevCx;
+      const movedCy = cy - prevCy;
+
+      let nextTx = tx + movedCx;
+      let nextTy = ty + movedCy;
+
+      const el = viewportRef.current;
+      if (el) {
+        const vpBox = el.getBoundingClientRect();
+        const vx = cx - vpBox.left;
+        const vy = cy - vpBox.top;
+
+        const wx = (vx - nextTx) / scale;
+        const wy = (vy - nextTy) / scale;
+
+        const nextScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale * factor));
+        nextTx = vx - wx * nextScale;
+        nextTy = vy - wy * nextScale;
+
+        const clamped = clampPan(nextTx, nextTy, nextScale);
+        setScale(nextScale);
         setTx(clamped.tx);
         setTy(clamped.ty);
       }
+
+      prevPinch.current = { dist, cx, cy };
+      return;
     }
 
-    // ホバー座標の通知（ドラッグ中/非ドラッグ中どちらでも）
-    notifyHover(e.clientX, e.clientY);
+    // 1本指/マウス → パン
+    const clamped = clampPan(tx + dx, ty + dy, scale);
+    setTx(clamped.tx);
+    setTy(clamped.ty);
   };
 
-  const onPointerLeave = () => {
-    onHoverLeave?.();
-  };
-
-  // ====== 画像領域クリック → 正規化座標で onAddPinAt ======
+  // 画像領域クリック → 正規化座標で onAddPinAt
   const handleOverlayClick = (e: MouseEvent<HTMLDivElement>) => {
     if (!onAddPinAt) return;
-
-    const vp = viewportRef.current;
-    if (!vp) return;
-
-    const vpBox = vp.getBoundingClientRect();
-    const vx = e.clientX - vpBox.left;
-    const vy = e.clientY - vpBox.top;
-
-    // world 座標（scale/translate を逆変換）
-    const wx = (vx - tx) / scale;
-    const wy = (vy - ty) / scale;
-
-    // 正規化 0..1
-    const nx = wx / rect.w;
-    const ny = wy / rect.h;
-
-    const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
-    onAddPinAt(clamp01(nx), clamp01(ny));
+    const pos = computeNormalizedAt(e.clientX, e.clientY);
+    if (!pos) return;
+    onAddPinAt(pos.nx, pos.ny);
   };
 
-  // ====== ダブルクリックでサクッと拡大 ======
   const onDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     zoomAt(e.clientX, e.clientY, 1.5);
   };
@@ -333,13 +293,18 @@ const MapImage: React.FC<MapImageProps> = ({
       <div
         ref={viewportRef}
         className="absolute touch-none"
-        style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
+        style={{
+          left: rect.x,
+          top: rect.y,
+          width: rect.w,
+          height: rect.h,
+          cursor: placing ? "none" : "default", // ★ 設置中はカーソル非表示
+        }}
         onWheel={onWheel}
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
         onPointerMove={onPointerMove}
-        onPointerLeave={onPointerLeave}
         onDoubleClick={onDoubleClick}
         onClick={handleOverlayClick}
       >
@@ -365,12 +330,10 @@ const MapImage: React.FC<MapImageProps> = ({
             />
           )}
 
-          {/* ここに % 基準の PlanPin / AreaPin / Ghost を置く */}
+          {/* 相対(%基準)の子要素（ピン/ゴースト等） */}
           {children}
         </div>
       </div>
-
-      {/* 既存の px 直打ちピンを使うなら、必要に応じてここで rect を使って px 変換して配置してください */}
     </div>
   );
 };

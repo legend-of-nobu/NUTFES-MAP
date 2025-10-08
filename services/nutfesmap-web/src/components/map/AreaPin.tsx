@@ -7,18 +7,19 @@ export type ApiAreaPin = {
   name: string;
   xNorm: number; // 0..1
   yNorm: number; // 0..1
-  linkToMapId?: string | null; // ★ 追加：遷移先マップ
+  linkToMapId?: string | null;
 };
 
 type Props = {
   area: ApiAreaPin;
   onSelect: (area: ApiAreaPin) => void;
+  ghost?: boolean; // ★ 追加
 };
 
 const MAX_FONT_SIZE = 12; // px
 const MIN_FONT_SIZE = 5;  // px
 
-const AreaPin: React.FC<Props> = ({ area, onSelect }) => {
+const AreaPin: React.FC<Props> = ({ area, onSelect, ghost = false }) => {
   const [fontSize, setFontSize] = useState(MAX_FONT_SIZE);
   const containerRef = useRef<HTMLDivElement>(null);
   const textRef = useRef<HTMLSpanElement>(null);
@@ -35,7 +36,6 @@ const AreaPin: React.FC<Props> = ({ area, onSelect }) => {
     const text = textRef.current;
     if (!container || !text) return;
 
-    // クローンでサイズ算出
     const tempText = text.cloneNode(true) as HTMLSpanElement;
     tempText.style.position = "absolute";
     tempText.style.visibility = "hidden";
@@ -45,11 +45,17 @@ const AreaPin: React.FC<Props> = ({ area, onSelect }) => {
     let current = MAX_FONT_SIZE;
     tempText.style.fontSize = `${current}px`;
 
-    if (tempText.scrollHeight > container.clientHeight || tempText.scrollWidth > container.clientWidth) {
+    if (
+      tempText.scrollHeight > container.clientHeight ||
+      tempText.scrollWidth > container.clientWidth
+    ) {
       while (current > MIN_FONT_SIZE) {
         current--;
         tempText.style.fontSize = `${current}px`;
-        if (tempText.scrollHeight <= container.clientHeight && tempText.scrollWidth <= container.clientWidth) {
+        if (
+          tempText.scrollHeight <= container.clientHeight &&
+          tempText.scrollWidth <= container.clientWidth
+        ) {
           break;
         }
       }
@@ -64,17 +70,25 @@ const AreaPin: React.FC<Props> = ({ area, onSelect }) => {
     top: `${area.yNorm * 100}%`,
   };
 
+  const interactiveProps = ghost
+    ? {}
+    : {
+        onClick: (e: React.MouseEvent) => {
+          e.stopPropagation();
+          onSelect(area);
+        },
+      };
+
   return (
     <div
       style={{ position: "absolute", ...posStyle }}
-      className="absolute -translate-x-1/2 -translate-y-full cursor-pointer"
-      onClick={(e) => {
-        e.stopPropagation();
-        onSelect(area);
-      }}
-      role="button"
-      tabIndex={0}
-      aria-label={`${area.name}（エリア）`}
+      className={`absolute -translate-x-1/2 -translate-y-full ${
+        ghost ? "pointer-events-none opacity-60" : "cursor-pointer"
+      }`}
+      role={ghost ? undefined : "button"}
+      tabIndex={ghost ? -1 : 0}
+      aria-label={ghost ? undefined : `${area.name}（エリア）`}
+      {...interactiveProps}
     >
       <div className="relative h-[67px] w-[80px]">
         <img src="/fan.svg" alt="エリア" className="absolute left-0 top-0 h-full w-full" />

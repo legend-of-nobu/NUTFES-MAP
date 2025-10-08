@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import AdminHeader from "./AdminHeader";
 import MapHeader from "./MapHeader";
 import Map from "./Map";
@@ -17,10 +17,11 @@ type MapType = {
   imageData?: string | null;
   naturalWidth?: number;
   naturalHeight?: number;
-  parentMapId?: string | null; // ★ 追加
+  parentMapId?: string | null;
 };
 
 type PinKind = "area" | "plan";
+
 const API = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
 export default function AdminPage() {
@@ -44,7 +45,7 @@ export default function AdminPage() {
   };
   const closeSideMenu = () => {
     setSideMenuMode(null);
-    // 設置モードは閉じたら解除
+    // 設置モード終了（ゴースト除去）
     setPlacingKind(null);
     setDraftPos(null);
   };
@@ -53,7 +54,7 @@ export default function AdminPage() {
   const [showPinKindModal, setShowPinKindModal] = useState(false);
   const [selectedKind, setSelectedKind] = useState<PinKind | null>(null);
 
-  // 設置モード（モーダル決定後、MapImage内クリックで確定）
+  // 設置モード：選択中のピン種別と確定座標
   const [placingKind, setPlacingKind] = useState<PinKind | null>(null);
   const [draftPos, setDraftPos] = useState<{ xNorm: number; yNorm: number } | null>(null);
 
@@ -143,16 +144,19 @@ export default function AdminPage() {
   };
   const handleConfirmPinKind = () => {
     if (!selectedKind) return;
-    // 設置開始
+    // 設置開始（追従モード）
     setPlacingKind(selectedKind);
+    setDraftPos(null);
     setShowPinKindModal(false);
   };
 
   // MapImage 内クリックで座標確定 → サイドメニュー起動
   const handleAddPinAt = (xNorm: number, yNorm: number) => {
+    // 既に確定済みなら無視（ゴーストは固定のまま）
+    if (draftPos) return;
     if (!placingKind || !selectedMap) return;
-    setDraftPos({ xNorm, yNorm });
-    setSideMenuMode(placingKind); // "area" or "plan"
+    setDraftPos({ xNorm, yNorm });   // ← 以降は追従停止してゴースト固定
+    setSideMenuMode(placingKind);    // "area" or "plan" を開く
   };
 
   // PlanPin クリック → BottomSheet
@@ -167,27 +171,21 @@ export default function AdminPage() {
     await goToMapId(area.linkToMapId);
   };
 
-  // ★ 親マップへ戻る
   const handleBackToParent = async () => {
     const parentId = selectedMap?.parentMapId;
     if (!parentId) return;
     await goToMapId(parentId);
   };
 
-  // ★ mapId からマップへ遷移（一覧に無ければ取得して追加）
   const goToMapId = async (mapId: string) => {
-    // すでに一覧にあるならそれを使う
     const existing = maps.find((m) => m.id === mapId);
     if (existing) {
       setSelectedMap(existing);
       return;
     }
-    // 無ければ個別取得（存在すれば追加）
     try {
       const res = await fetch(`${API}/maps/${mapId}`, { credentials: "include" });
       if (!res.ok) {
-        console.warn("failed to fetch map detail:", res.status);
-        // 最低限の情報で遷移（名前未取得でも遷移だけできる）
         setSelectedMap({ id: mapId, name: "", parentMapId: null });
         return;
       }
@@ -200,19 +198,14 @@ export default function AdminPage() {
         naturalHeight: m.naturalHeight ?? 0,
         parentMapId: m.parentMapId ?? null,
       };
-      setMaps((prev) => {
-        // 重複登録防止
-        if (prev.some((x) => x.id === mapObj.id)) return prev;
-        return [...prev, mapObj];
-      });
+      setMaps((prev) => (prev.some((x) => x.id === mapObj.id) ? prev : [...prev, mapObj]));
       setSelectedMap(mapObj);
-    } catch (e) {
-      console.error("failed to fetch map detail:", e);
+    } catch {
       setSelectedMap({ id: mapId, name: "", parentMapId: null });
     }
   };
 
-  // サイドメニュー経由で Area/Plan 作成完了時に pin 配列を更新
+  // サイドメニュー経由で Area/Plan 作成完了時に配列追加
   const appendAreaPin = (p: ApiAreaPin) => setAreaPins((prev) => [...prev, p]);
   const appendPlanPin = (p: ApiPin) => setPlanPins((prev) => [...prev, p]);
 
@@ -234,8 +227,8 @@ export default function AdminPage() {
     <div className="flex flex-col h-screen bg-[#f5f0dc]">
       <MapHeader
         mapName={selectedMap?.name ?? ""}
-        parentMapId={selectedMap?.parentMapId ?? null} // ★ 追加
-        onBack={handleBackToParent}                    // ★ 追加
+        parentMapId={selectedMap?.parentMapId ?? null}
+        onBack={handleBackToParent}
       />
 
       {/* Map 本体 */}
@@ -247,9 +240,11 @@ export default function AdminPage() {
           onPlanPinSelect={handlePlanPinSelect}
           onAreaPinSelect={handleAreaPinSelect}
           onAddPin={mode === "edit" ? handleOpenPinKindModal : undefined}
-          // 設置モード専用：MapImage内でクリックされた座標を受け取る
+          // 設置モード：クリック確定で draftPos をセット（以降追従停止）
           onAddPinAt={placingKind ? handleAddPinAt : undefined}
           placing={!!placingKind}
+          placingKind={placingKind}
+          draftPos={draftPos} // ★ 追加（ゴースト固定用）
           mapId={selectedMap?.id ?? null}
           mapImageData={toPreviewUrl(selectedMap?.imageData ?? null)}
           naturalWidth={selectedMap?.naturalWidth ?? 4096}
@@ -296,7 +291,7 @@ export default function AdminPage() {
                 }
               : undefined
           }
-          // ★ 追加：ピン設置に必要な共通情報
+          // ★ ピン設置用コンテキスト（保存で実ピン追加 → closeSideMenu でゴースト除去）
           pinContext={{
             placingKind: placingKind,
             mapId: selectedMap?.id ?? null,
