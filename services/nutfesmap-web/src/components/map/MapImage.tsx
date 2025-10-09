@@ -6,6 +6,8 @@ import React, {
   useState,
   MouseEvent,
   useCallback,
+  createContext,
+  useContext,
 } from "react";
 
 type MapImageProps = {
@@ -30,6 +32,26 @@ type MapImageProps = {
   // rectに一致する相対コンテナ内へ自由に children を描画（PlanPin/AreaPin/ゴースト等）
   children?: React.ReactNode;
 };
+
+type MapMetrics = {
+  renderedWidth: number;
+  renderedHeight: number;
+  naturalWidth: number;
+  naturalHeight: number;
+  scale: number;
+};
+
+const defaultMetrics: MapMetrics = {
+  renderedWidth: 0,
+  renderedHeight: 0,
+  naturalWidth: 1,
+  naturalHeight: 1,
+  scale: 1,
+};
+
+const MapMetricsContext = createContext<MapMetrics>(defaultMetrics);
+
+export const useMapMetrics = () => useContext(MapMetricsContext);
 
 function calcContainRect(
   containerW: number,
@@ -109,6 +131,18 @@ const MapImage: React.FC<MapImageProps> = ({
   const rect = useMemo(
     () => calcContainRect(containerWidth, containerHeight, safeNaturalWidth, safeNaturalHeight),
     [containerWidth, containerHeight, safeNaturalWidth, safeNaturalHeight]
+  );
+
+  const mapScale = rect.w > 0 ? rect.w / safeNaturalWidth : 1;
+  const metrics: MapMetrics = useMemo(
+    () => ({
+      renderedWidth: rect.w,
+      renderedHeight: rect.h,
+      naturalWidth: safeNaturalWidth,
+      naturalHeight: safeNaturalHeight,
+      scale: mapScale,
+    }),
+    [rect.w, rect.h, safeNaturalWidth, safeNaturalHeight, mapScale]
   );
 
   // ====== ズーム・パンの状態 ======
@@ -357,7 +391,9 @@ const MapImage: React.FC<MapImageProps> = ({
           )}
 
           {/* 相対(%基準)の子要素（ピン/ゴースト等） */}
-          {children}
+          <MapMetricsContext.Provider value={metrics}>
+            {children}
+          </MapMetricsContext.Provider>
         </div>
       </div>
     </div>
