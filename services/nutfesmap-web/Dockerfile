@@ -1,17 +1,28 @@
-# ---- dev ----
+# services/nutfesmap-web/Dockerfile
+
+# --- dev 用（ホットリロード） ---
 FROM node:20-alpine AS dev
 WORKDIR /app
-
-ENV NODE_ENV=development
-
-# 依存だけ先に入れてキャッシュを効かせる
 COPY package*.json ./
-RUN npm install
-
-# 開発はソースをCOPYしない（↓composeでマウントするため）
-# CMDでは 0.0.0.0 バインド & ポーリング有効化
-ENV CHOKIDAR_USEPOLLING=true
-ENV WATCHPACK_POLLING=true
-
+RUN npm ci
+COPY . .
 EXPOSE 3000
-CMD ["npm", "run", "dev", "--", "-H", "0.0.0.0"]
+CMD ["npm","run","dev","--","-H","0.0.0.0"]
+
+# --- prod 用（ビルド→start） ---
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+# 環境変数（NEXT_PUBLIC_*）は build args で注入される想定
+ARG NEXT_PUBLIC_API_BASE_URL
+ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
+COPY . .
+RUN npm run build
+
+FROM node:20-alpine AS prod
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=builder /app ./
+EXPOSE 3000
+CMD ["npm","run","start","--","-H","0.0.0.0"]

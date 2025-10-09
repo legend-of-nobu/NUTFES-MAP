@@ -1,0 +1,9 @@
+tunnel: 76614e39-6ea4-431e-a84c-571235b83321
+credentials-file: /etc/cloudflared/credentials.json
+
+ingress:
+  - hostname: app.navifes.com
+    service: http://nutfesmap-web:3000
+  - hostname: api.navifes.com
+    service: http://nutfesmap-api:8080
+  - service: http_status:404
