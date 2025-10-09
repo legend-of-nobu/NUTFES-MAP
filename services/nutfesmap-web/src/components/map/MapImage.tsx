@@ -6,9 +6,9 @@ import React, {
   useState,
   MouseEvent,
   useCallback,
+  createContext,
+  useContext,
 } from "react";
-
-export type PinType = { id: string | number; xNorm: number; yNorm: number };
 
 type MapImageProps = {
   src: string | null | undefined;
@@ -16,10 +16,6 @@ type MapImageProps = {
   naturalHeight: number;
   containerWidth: number;
   containerHeight: number;
-
-  // 既存（px直指定ピン）を使うならこの2つは適宜利用してください
-  pins?: PinType[];
-  onPinClick?: (p: PinType) => void;
 
   // 画像領域をクリックした時、正規化座標でコールバック（ピン設置）
   onAddPinAt?: (xNorm: number, yNorm: number) => void;
@@ -36,6 +32,26 @@ type MapImageProps = {
   // rectに一致する相対コンテナ内へ自由に children を描画（PlanPin/AreaPin/ゴースト等）
   children?: React.ReactNode;
 };
+
+type MapMetrics = {
+  renderedWidth: number;
+  renderedHeight: number;
+  naturalWidth: number;
+  naturalHeight: number;
+  scale: number;
+};
+
+const defaultMetrics: MapMetrics = {
+  renderedWidth: 0,
+  renderedHeight: 0,
+  naturalWidth: 1,
+  naturalHeight: 1,
+  scale: 1,
+};
+
+const MapMetricsContext = createContext<MapMetrics>(defaultMetrics);
+
+export const useMapMetrics = () => useContext(MapMetricsContext);
 
 function calcContainRect(
   containerW: number,
@@ -67,8 +83,6 @@ const MapImage: React.FC<MapImageProps> = ({
   naturalHeight,
   containerWidth,
   containerHeight,
-  pins = [],
-  onPinClick,
   onAddPinAt,
   onHoverAt,
   placing = false,
@@ -78,11 +92,57 @@ const MapImage: React.FC<MapImageProps> = ({
 }) => {
   const viewportRef = useRef<HTMLDivElement>(null); // ビューポート（見える範囲）
   const worldRef = useRef<HTMLDivElement>(null); // 画像とピンを載せる層（拡大縮小・平行移動する）
+  const [intrinsicSize, setIntrinsicSize] = useState<{ w: number; h: number } | null>(null);
+
+  useEffect(() => {
+    if (!src) {
+      setIntrinsicSize(null);
+      return;
+    }
+
+    let cancelled = false;
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      if (cancelled) return;
+      const w = img.naturalWidth || 0;
+      const h = img.naturalHeight || 0;
+      if (w > 0 && h > 0) {
+        setIntrinsicSize((prev) => (prev && prev.w === w && prev.h === h ? prev : { w, h }));
+      } else {
+        setIntrinsicSize(null);
+      }
+    };
+    img.onerror = () => {
+      if (!cancelled) setIntrinsicSize(null);
+    };
+    img.src = src;
+    return () => {
+      cancelled = true;
+    };
+  }, [src]);
+
+  const effectiveNaturalWidth = intrinsicSize?.w && intrinsicSize.w > 0 ? intrinsicSize.w : naturalWidth;
+  const effectiveNaturalHeight = intrinsicSize?.h && intrinsicSize.h > 0 ? intrinsicSize.h : naturalHeight;
+  const safeNaturalWidth = effectiveNaturalWidth > 0 ? effectiveNaturalWidth : 1;
+  const safeNaturalHeight = effectiveNaturalHeight > 0 ? effectiveNaturalHeight : 1;
 
   // 画像を「contain」した座標・サイズ
   const rect = useMemo(
-    () => calcContainRect(containerWidth, containerHeight, naturalWidth, naturalHeight),
-    [containerWidth, containerHeight, naturalWidth, naturalHeight]
+    () => calcContainRect(containerWidth, containerHeight, safeNaturalWidth, safeNaturalHeight),
+    [containerWidth, containerHeight, safeNaturalWidth, safeNaturalHeight]
+  );
+
+  const mapScale = rect.w > 0 ? rect.w / safeNaturalWidth : 1;
+  const metrics: MapMetrics = useMemo(
+    () => ({
+      renderedWidth: rect.w,
+      renderedHeight: rect.h,
+      naturalWidth: safeNaturalWidth,
+      naturalHeight: safeNaturalHeight,
+      scale: mapScale,
+    }),
+    [rect.w, rect.h, safeNaturalWidth, safeNaturalHeight, mapScale]
   );
 
   // ====== ズーム・パンの状態 ======
@@ -151,8 +211,8 @@ const MapImage: React.FC<MapImageProps> = ({
       const nextScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale * zoomFactor));
 
       // ズーム後も同じ画素を同じ位置に
-      let nextTx = vx - wx * nextScale;
-      let nextTy = vy - wy * nextScale;
+      const nextTx = vx - wx * nextScale;
+      const nextTy = vy - wy * nextScale;
 
       const clamped = clampPan(nextTx, nextTy, nextScale);
       setScale(nextScale);
@@ -331,7 +391,9 @@ const MapImage: React.FC<MapImageProps> = ({
           )}
 
           {/* 相対(%基準)の子要素（ピン/ゴースト等） */}
-          {children}
+          <MapMetricsContext.Provider value={metrics}>
+            {children}
+          </MapMetricsContext.Provider>
         </div>
       </div>
     </div>

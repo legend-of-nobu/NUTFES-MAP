@@ -5,6 +5,7 @@ import { FaMapPin, FaHamburger } from "react-icons/fa";
 import { MdFamilyRestroom } from "react-icons/md";
 import { FaBuildingColumns } from "react-icons/fa6";
 import { Category } from "@/types/enums";
+import { useMapMetrics } from "@/components/map/MapImage";
 
 // ---- BottomSheet が求める型 ----
 export interface SpotData {
@@ -63,7 +64,44 @@ type PlanPinProps = {
   ghost?: boolean; // ★ 追加：ゴースト表示（非クリック・半透明）
 };
 
+const BASE_PIN_SIZE = 144;
+const BASE_WAIT_BADGE_SIZE = 36;
+const BASE_WAIT_BADGE_FONT = 14;
+const BASE_WAIT_BADGE_TOP = 20;
+const BASE_WAIT_BADGE_RIGHT = 28;
+const BASE_MAP_PIN_ICON = 64;
+const BASE_CATEGORY_ICON = 32;
+const BASE_LABEL_TOP = 92;
+const BASE_LABEL_MIN_WIDTH = 80;
+const BASE_LABEL_MAX_WIDTH = 136;
+const BASE_LABEL_FONT = 14;
+const BASE_REFERENCE_WIDTH = 720; // px
+
 const PlanPin: React.FC<PlanPinProps> = ({ pin, onSelect, ghost = false }) => {
+  const metrics = useMapMetrics();
+  const rawScale =
+    metrics.renderedWidth > 0 ? metrics.renderedWidth / BASE_REFERENCE_WIDTH : 1;
+  const pinScale = Math.min(Math.max(rawScale, 0.5), 1.6);
+  const scalePx = (value: number) => Math.max(value * pinScale, 1);
+
+  const layout = {
+    boxSize: scalePx(BASE_PIN_SIZE),
+    waitBadge: {
+      size: scalePx(BASE_WAIT_BADGE_SIZE),
+      font: scalePx(BASE_WAIT_BADGE_FONT),
+      top: scalePx(BASE_WAIT_BADGE_TOP),
+      right: scalePx(BASE_WAIT_BADGE_RIGHT),
+    },
+    mapPinIcon: scalePx(BASE_MAP_PIN_ICON),
+    categoryIcon: scalePx(BASE_CATEGORY_ICON),
+    label: {
+      top: scalePx(BASE_LABEL_TOP),
+      minWidth: scalePx(BASE_LABEL_MIN_WIDTH),
+      maxWidth: scalePx(BASE_LABEL_MAX_WIDTH),
+      font: scalePx(BASE_LABEL_FONT),
+    },
+  };
+
   const catEnum = toCategoryEnum(pin.category);
   const CategoryIcon = categoryIcons[catEnum] ?? FaBuildingColumns;
   const placeLabel = pin.place?.trim() || `(${(pin.xNorm * 100).toFixed(1)}%, ${(pin.yNorm * 100).toFixed(1)}%)`;
@@ -111,23 +149,51 @@ const PlanPin: React.FC<PlanPinProps> = ({ pin, onSelect, ghost = false }) => {
       {...interactiveProps}
     >
       {/* 当たり判定は 60px（見た目は従来のまま） */}
-      <div className="relative flex h-[60px] w-[60px] items-center justify-center">
+      <div
+        className="relative flex items-center justify-center"
+        style={{ width: layout.boxSize, height: layout.boxSize }}
+      >
         {/* 待ち時間バッジ（右上） */}
-        <div className="absolute right-[12px] top-[8px] z-30 flex h-4 w-4 items-center justify-center rounded-full bg-[#DC143C] text-[6px] font-bold text-white">
+        <div
+          className="absolute z-30 flex items-center justify-center rounded-full bg-[#DC143C] font-bold text-white"
+          style={{
+            width: layout.waitBadge.size,
+            height: layout.waitBadge.size,
+            top: layout.waitBadge.top,
+            right: layout.waitBadge.right,
+            fontSize: layout.waitBadge.font,
+          }}
+        >
           {pin.waitMinutes}分
         </div>
 
         {/* 画鋲（背面） */}
-        <FaMapPin className="absolute text-[28px] text-[#9370DB] z-10 drop-shadow" />
+        <FaMapPin
+          className="absolute z-10 text-[#9370DB] drop-shadow"
+          style={{ fontSize: layout.mapPinIcon }}
+        />
 
         {/* カテゴリアイコン（中央） */}
-        <div className="absolute left-1/2 top-[46%] z-20 -translate-x-1/2 -translate-y-1/2 text-[13px] text-black">
+        <div
+          className="absolute left-1/2 top-[46%] z-20 -translate-x-1/2 -translate-y-1/2 text-black"
+          style={{ fontSize: layout.categoryIcon }}
+        >
           <CategoryIcon />
         </div>
 
         {/* イベント名ラベル（下） */}
-        <div className="absolute top-[38px] z-20 px-1 rounded-lg border border-black bg-white min-w-[34px] max-w-[56px]">
-          <span className="block break-words text-center text-[6px] font-bold line-clamp-2">
+        <div
+          className="absolute z-20 rounded-lg border border-black bg-white px-1"
+          style={{
+            top: layout.label.top,
+            minWidth: layout.label.minWidth,
+            maxWidth: layout.label.maxWidth,
+          }}
+        >
+          <span
+            className="block break-words text-center font-bold leading-tight"
+            style={{ fontSize: layout.label.font }}
+          >
             {pin.name}
           </span>
         </div>
