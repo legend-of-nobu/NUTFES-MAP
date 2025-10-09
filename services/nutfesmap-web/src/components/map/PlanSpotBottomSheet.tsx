@@ -3,11 +3,8 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { IoCloseCircle, IoFastFood } from "react-icons/io5";
 import { VscLocation } from "react-icons/vsc";
-import { MdAccessTime,MdFamilyRestroom } from "react-icons/md";
-import { FaBuildingColumns } from "react-icons/fa6";
+import { MdAccessTime } from "react-icons/md";
 import type { SpotData } from "./PlanPin";
-import { Category } from "@/types/enums";
-import { NextJsHotReloaderInterface } from "next/dist/server/dev/hot-reloader-types";
 
 /** ご指定のデザイン・Props に合わせた BottomSheet */
 type Props = {
@@ -18,16 +15,6 @@ type Props = {
 
 export default function PlanSpotBottomSheet({ isOpen, onClose, spotData }: Props) {
   if (!spotData) return null;
-
- // ✅ カテゴリごとのアイコンマップ
-  const categoryIconMap: Record<string, React.ReactNode> = {
-     [Category.Food]: <IoFastFood size={36} />,       // 飲食
-   [Category.Plan] : <FaBuildingColumns size={36} />,   // 企画
-    [Category.Child]: <MdFamilyRestroom size={36} />,      // 子供向け
-  };
-
-  // ✅ 一致しない場合はデフォルトを設定
-  const categoryIcon = categoryIconMap[spotData.category] || <IoFastFood size={36} />;
 
   return (
     <AnimatePresence>
@@ -58,9 +45,8 @@ export default function PlanSpotBottomSheet({ isOpen, onClose, spotData }: Props
               <div className="flex items-center justify-between">
                 <h2 className="text-xl font-bold pt-2 pl-2">{spotData.title}</h2>
 
-                  {/* ✅ アイコン＋カテゴリ名（切り替え対応） */}
                 <div className="flex flex-col items-center">
-                  {categoryIcon}
+                  <IoFastFood size={36} />
                   <span className="bg-planning-details rounded-md text-[12px] px-2">
                     {spotData.category}
                   </span>
