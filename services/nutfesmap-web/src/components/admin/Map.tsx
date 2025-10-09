@@ -7,6 +7,7 @@ import AddPinButton from "@/components/map/AddPinButton";
 import AreaPin, { ApiAreaPin } from "@/components/map/AreaPin";
 
 type PinKind = "plan" | "area";
+type FloorOption = { id: string; label: string };
 
 type MapProps = {
   // 企画ピン
@@ -33,9 +34,9 @@ type MapProps = {
 
   header?: React.ReactNode;
   mode?: "edit" | "user";
-  floors?: string[];
-  selectedFloor?: string;
-  onSelectFloor?: (floor: string) => void;
+  floors?: FloorOption[];
+  selectedFloorId?: string | null;
+  onSelectFloor?: (floorId: string) => void;
   mapImageData?: string | null;
   mapId?: string | null;
   naturalWidth?: number;
@@ -54,8 +55,8 @@ export default function Map({
   draftPos = null,
   header = null,
   mode = "user",
-  floors = ["3F", "2F", "1F"],
-  selectedFloor = "2F",
+  floors = [],
+  selectedFloorId = null,
   onSelectFloor = () => {},
   mapImageData = null,
   mapId = null,
@@ -163,12 +164,18 @@ export default function Map({
       </MapImage>
 
       {/* 左下：階層セレクタ */}
-      <div className="absolute bottom-4 left-4 z-10">
-        <StairSelector floors={floors} selectedFloor={selectedFloor} onSelect={onSelectFloor} />
-      </div>
+      {floors.length > 0 && (
+        <div className="absolute bottom-4 left-4 z-10">
+          <StairSelector
+            floors={floors}
+            selectedFloorId={selectedFloorId ?? undefined}
+            onSelect={onSelectFloor}
+          />
+        </div>
+      )}
 
       {/* 右下：ピン追加ボタン（edit時のみ） */}
-      {mode === "edit" && (
+      {mode === "edit" && onAddPin && (
         <div className="absolute bottom-6 right-6 z-10">
           <AddPinButton onClick={onAddPin} />
         </div>

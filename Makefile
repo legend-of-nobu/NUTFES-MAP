@@ -42,7 +42,7 @@ api-sh:
 
 ## nutfesmap-database コンテナにログイン（MySQL入り Alpine/Ubuntu に対応）
 db-sh:
-	$(DC) exec nutfesmap-database sh || $(DC) exec nutfesmap-database bash
+	$(DC) exec nutfesmap-database mysql -uwebapp -pPassword
 
 ## 未使用ネットワークやボリューム削除
 prune:

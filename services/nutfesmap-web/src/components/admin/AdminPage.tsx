@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import AdminHeader from "./AdminHeader";
 import MapHeader from "./MapHeader";
 import Map from "./Map";
@@ -17,6 +17,8 @@ type MapType = {
   naturalWidth?: number;
   naturalHeight?: number;
   parentMapId?: string | null;
+  hasFloors?: boolean;
+  floorCount?: number;
 };
 
 type PinKind = "area" | "plan";
@@ -25,6 +27,8 @@ const API = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 export default function AdminPage() {
   const [maps, setMaps] = useState<MapType[]>([]);
   const [selectedMap, setSelectedMap] = useState<MapType | null>(null);
+  const [floorItems, setFloorItems] = useState<Array<{ id: string; name: string; index: number; map: MapType }>>([]);
+  const [selectedFloorId, setSelectedFloorId] = useState<string | null>(null);
 
   const [planPins, setPlanPins] = useState<ApiPin[]>([]);
   const [areaPins, setAreaPins] = useState<ApiAreaPin[]>([]);
@@ -36,7 +40,7 @@ export default function AdminPage() {
   const [editPlanTarget, setEditPlanTarget] = useState<ApiPin | null>(null);
 
   const openMapEdit = () => {
-    if (!selectedMap) {
+    if (!mapEditTarget) {
       alert("編集するマップを先に選択してください。");
       return;
     }
@@ -59,30 +63,210 @@ export default function AdminPage() {
   const [isSheetOpen, setIsSheetOpen] = useState(false);
   const [selectedSpot, setSelectedSpot] = useState<SpotData | null>(null);
 
+  const normalizeMap = useCallback((raw: any): MapType => {
+    if (!raw) {
+      return {
+        id: "",
+        name: "",
+        imageData: null,
+        naturalWidth: 0,
+        naturalHeight: 0,
+        parentMapId: null,
+        hasFloors: false,
+        floorCount: 0,
+      };
+    }
+    const floorCount =
+      typeof raw?.floorCount === "number" && !Number.isNaN(raw.floorCount)
+        ? raw.floorCount
+        : 0;
+
+    return {
+      id: raw.id ?? "",
+      name: raw.name ?? "",
+      imageData: raw.imageData ?? null,
+      naturalWidth: raw.naturalWidth ?? 0,
+      naturalHeight: raw.naturalHeight ?? 0,
+      parentMapId: raw.parentMapId ?? null,
+      hasFloors: floorCount > 0,
+      floorCount,
+    };
+  }, []);
+
+  const applyMapUpdate = useCallback((mapObj: MapType) => {
+    if (!mapObj.id) return;
+    setMaps((prev) => {
+      const index = prev.findIndex((m) => m.id === mapObj.id);
+      if (index === -1) {
+        return [...prev, mapObj];
+      }
+      const next = [...prev];
+      next[index] = { ...next[index], ...mapObj };
+      return next;
+    });
+    setSelectedMap((prev) => (prev && prev.id === mapObj.id ? { ...prev, ...mapObj } : prev));
+  }, []);
+
+  const loadFloorStack = useCallback(
+    async (mapId: string, preferredFloorId?: string | null) => {
+      try {
+        const res = await fetch(`${API}/maps/${mapId}/floors`, { credentials: "include" });
+        if (!res.ok) {
+          setFloorItems([]);
+          setSelectedFloorId(null);
+          return [];
+        }
+        const payload = await res.json();
+        const rawItems: any[] = Array.isArray(payload?.items) ? payload.items : [];
+        const floors = rawItems
+          .map((item) => {
+            const mapData = normalizeMap(item?.map);
+            if (!mapData.id) return null;
+            const index = typeof item?.floorIndex === "number" ? item.floorIndex : 0;
+            const label =
+              mapData.name || (index > 0 ? `${index}F` : mapData.name || mapData.id);
+            return {
+              id: mapData.id,
+              name: label,
+              index,
+              map: mapData,
+            };
+          })
+          .filter((item): item is { id: string; name: string; index: number; map: MapType } => !!item);
+        floors.sort((a, b) => {
+          if (a.index !== b.index) return b.index - a.index;
+          return a.name.localeCompare(b.name);
+        });
+
+        setFloorItems(floors);
+        setSelectedFloorId((prev) => {
+          const desiredId =
+            preferredFloorId && floors.some((f) => f.id === preferredFloorId)
+              ? preferredFloorId
+              : prev && floors.some((f) => f.id === prev)
+                ? prev
+                : floors[0]?.id ?? null;
+          return desiredId ?? null;
+        });
+
+        const updatedCount =
+          typeof payload?.floorCount === "number" ? payload.floorCount : floors.length;
+        const hasFloorsFlag = updatedCount > 0;
+
+        setMaps((prev) => {
+          let next = prev.map((m) =>
+            m.id === mapId ? { ...m, floorCount: updatedCount, hasFloors: hasFloorsFlag } : m
+          );
+          floors.forEach(({ map }) => {
+            const idx = next.findIndex((m) => m.id === map.id);
+            if (idx === -1) {
+              next = [...next, map];
+            } else {
+              const clone = [...next];
+              clone[idx] = { ...clone[idx], ...map };
+              next = clone;
+            }
+          });
+          return next;
+        });
+        setSelectedMap((prev) =>
+          prev && prev.id === mapId
+            ? { ...prev, floorCount: updatedCount, hasFloors: hasFloorsFlag }
+            : prev
+        );
+
+        return floors;
+      } catch (err) {
+        console.error("Failed to load floors:", err);
+        setFloorItems([]);
+        setSelectedFloorId(null);
+        return [];
+      }
+    },
+    [API, normalizeMap]
+  );
+
+  const activeMap = useMemo(() => {
+    if (!selectedMap) return null;
+    if (selectedMap.hasFloors) {
+      const floor =
+        floorItems.find((f) => f.id === (selectedFloorId ?? "")) ?? floorItems[0];
+      return floor?.map ?? null;
+    }
+    return selectedMap;
+  }, [selectedMap, floorItems, selectedFloorId]);
+
+  const floorOptions = useMemo(
+    () =>
+      floorItems.map((f) => ({
+        id: f.id,
+        label: f.name || (f.index > 0 ? `${f.index}F` : f.id),
+      })),
+    [floorItems]
+  );
+
+  const topFloorItem = useMemo(() => {
+    if (!floorItems.length) return null;
+    return floorItems.reduce((prev, current) =>
+      current.index > prev.index ? current : prev
+    );
+  }, [floorItems]);
+
+  const stairAddDisabled = !selectedMap;
+  const stairDeleteDisabled =
+    !selectedMap || !topFloorItem || selectedFloorId !== topFloorItem.id;
+  const mapEditTarget = activeMap ?? selectedMap;
+
   // 初期ロード：マップ一覧
   useEffect(() => {
     (async () => {
       try {
         const res = await fetch(`${API}/maps/index`, { credentials: "include" });
         const data = await res.json();
-        const items: MapType[] =
+        const rawItems: any[] =
           Array.isArray(data?.items) ? data.items :
           Array.isArray(data) ? data :
           data ? [data] : [];
-        setMaps(items);
-        setSelectedMap((prev) => prev ?? (items.length > 0 ? items[0] : null));
+        const normalized = rawItems
+          .map((item) => normalizeMap(item))
+          .filter((item) => item.id);
+        setMaps(normalized);
+        setSelectedMap((prev) => prev ?? (normalized.length > 0 ? normalized[0] : null));
       } catch (e) {
         console.error("Failed to fetch maps:", e);
       }
     })();
-  }, []);
+  }, [normalizeMap]);
+
+  useEffect(() => {
+    if (!selectedMap) {
+      setFloorItems([]);
+      setSelectedFloorId(null);
+      return;
+    }
+    if (!selectedMap.hasFloors) {
+      setFloorItems([]);
+      setSelectedFloorId(null);
+      return;
+    }
+    setFloorItems([]);
+    setSelectedFloorId(null);
+    void loadFloorStack(selectedMap.id);
+  }, [loadFloorStack, selectedMap?.hasFloors, selectedMap?.id]);
 
   // ピン一覧
   useEffect(() => {
-    if (!selectedMap?.id) return;
+    const targetMapId = activeMap?.id ?? null;
+    if (!targetMapId) {
+      setPlanPins([]);
+      setAreaPins([]);
+      return;
+    }
+    setPlanPins([]);
+    setAreaPins([]);
     (async () => {
       try {
-        const res = await fetch(`${API}/maps/${selectedMap.id}/pins`, { credentials: "include" });
+        const res = await fetch(`${API}/maps/${targetMapId}/pins`, { credentials: "include" });
         if (!res.ok) {
           console.warn("Failed to fetch pins:", res.status);
           setPlanPins([]); setAreaPins([]); return;
@@ -119,7 +303,11 @@ export default function AdminPage() {
         setPlanPins([]); setAreaPins([]);
       }
     })();
-  }, [selectedMap?.id]);
+  }, [activeMap?.id]);
+
+  useEffect(() => {
+    setDraftPos(null);
+  }, [activeMap?.id]);
 
   // 「＋ピン」
   const handleOpenPinKindModal = () => { setSelectedKind(null); setShowPinKindModal(true); };
@@ -133,10 +321,85 @@ export default function AdminPage() {
   // MapImage 内クリックで座標確定
   const handleAddPinAt = (xNorm: number, yNorm: number) => {
     if (draftPos) return;
-    if (!placingKind || !selectedMap) return;
+    if (!placingKind || !activeMap) return;
     setDraftPos({ xNorm, yNorm });
     setSideMenuMode(placingKind); // "area" or "plan"
   };
+
+  const handleSelectFloor = useCallback((floorId: string) => {
+    setSelectedFloorId(floorId);
+  }, []);
+
+  const handleStairAdd = useCallback(async () => {
+    if (!selectedMap) {
+      alert("階を追加するマップが選択されていません。");
+      return;
+    }
+    try {
+      const res = await fetch(`${API}/maps/${encodeURIComponent(selectedMap.id)}/floors`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        alert(`階の追加に失敗しました: ${res.status} ${text}`);
+        return;
+      }
+      const created = await res.json();
+      const newFloorId: string | null = created?.id ?? null;
+      const nextIndex =
+        Math.max(topFloorItem?.index ?? 0, selectedMap.floorCount ?? floorItems.length) + 1;
+      const nextName = `${nextIndex}F`;
+      if (newFloorId) {
+        try {
+          await fetch(`${API}/maps/${encodeURIComponent(newFloorId)}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ name: nextName }),
+          });
+        } catch (err) {
+          console.warn("階名の更新に失敗しました:", err);
+        }
+      }
+      await loadFloorStack(selectedMap.id, newFloorId);
+      applyMapUpdate({ ...selectedMap, hasFloors: true });
+    } catch (err) {
+      console.error(err);
+      alert("階の追加に失敗しました。ログを確認してください。");
+    }
+  }, [API, applyMapUpdate, floorItems.length, loadFloorStack, selectedMap, topFloorItem]);
+
+  const handleStairDelete = useCallback(async () => {
+    if (!selectedMap) {
+      alert("階を削除するマップが選択されていません。");
+      return;
+    }
+    if (!topFloorItem) {
+      alert("削除できる階がありません。");
+      return;
+    }
+    if (selectedFloorId !== topFloorItem.id) {
+      alert("削除できるのは一番上の階のみです。");
+      return;
+    }
+    if (!confirm(`「${topFloorItem.name}」を削除しますか？`)) return;
+    try {
+      const res = await fetch(`${API}/maps/${encodeURIComponent(topFloorItem.id)}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        alert(`階の削除に失敗しました: ${res.status} ${text}`);
+        return;
+      }
+      await loadFloorStack(selectedMap.id);
+    } catch (err) {
+      console.error(err);
+      alert("階の削除に失敗しました。ログを確認してください。");
+    }
+  }, [API, loadFloorStack, selectedFloorId, selectedMap, topFloorItem]);
 
   // PlanPin 選択
   const handlePlanPinSelect = (spot: SpotData & { id?: string }) => {
@@ -181,17 +444,38 @@ export default function AdminPage() {
     if (existing) { setSelectedMap(existing); return; }
     try {
       const res = await fetch(`${API}/maps/${mapId}`, { credentials: "include" });
-      if (!res.ok) { setSelectedMap({ id: mapId, name: "", parentMapId: null }); return; }
+      if (!res.ok) {
+        const fallback = {
+          id: mapId,
+          name: "",
+          imageData: null,
+          naturalWidth: 0,
+          naturalHeight: 0,
+          parentMapId: null,
+          hasFloors: false,
+          floorCount: 0,
+        };
+        applyMapUpdate(fallback);
+        setSelectedMap(fallback);
+        return;
+      }
       const m = await res.json();
-      const mapObj: MapType = {
-        id: m.id, name: m.name ?? "", imageData: m.imageData ?? null,
-        naturalWidth: m.naturalWidth ?? 0, naturalHeight: m.naturalHeight ?? 0,
-        parentMapId: m.parentMapId ?? null,
-      };
-        setMaps((prev) => (prev.some((x) => x.id === mapObj.id) ? prev : [...prev, mapObj]));
-        setSelectedMap(mapObj);
+      const mapObj = normalizeMap(m);
+      applyMapUpdate(mapObj);
+      setSelectedMap(mapObj);
     } catch {
-      setSelectedMap({ id: mapId, name: "", parentMapId: null });
+      const fallback = {
+        id: mapId,
+        name: "",
+        imageData: null,
+        naturalWidth: 0,
+        naturalHeight: 0,
+        parentMapId: null,
+        hasFloors: false,
+        floorCount: 0,
+      };
+      applyMapUpdate(fallback);
+      setSelectedMap(fallback);
     }
   };
 
@@ -211,15 +495,31 @@ export default function AdminPage() {
   const headerNode = useMemo(
     () => (
       <AdminHeader
-        currentMapName={selectedMap?.name ?? "未選択"}
+        currentMapName={
+          selectedMap?.hasFloors && activeMap
+            ? `${selectedMap.name} / ${activeMap.name}`
+            : activeMap?.name ?? selectedMap?.name ?? "未選択"
+        }
         mode={mode}
         onModeChange={(m) => setMode(m)}
         onMapEdit={openMapEdit}
-        onStairAdd={() => console.log("階を追加")}
-        onStairDelete={() => console.log("階を削除")}
+        onStairAdd={handleStairAdd}
+        onStairDelete={handleStairDelete}
+        disableStairAdd={stairAddDisabled}
+        disableStairDelete={stairDeleteDisabled}
       />
     ),
-    [selectedMap?.name, mode]
+    [
+      activeMap?.name,
+      handleStairAdd,
+      handleStairDelete,
+      mode,
+      openMapEdit,
+      selectedMap?.hasFloors,
+      selectedMap?.name,
+      stairAddDisabled,
+      stairDeleteDisabled,
+    ]
   );
 
   return (
@@ -237,15 +537,18 @@ export default function AdminPage() {
           mode={mode}
           onPlanPinSelect={handlePlanPinSelect}
           onAreaPinSelect={handleAreaPinSelect}
-          onAddPin={mode === "edit" ? handleOpenPinKindModal : undefined}
-          onAddPinAt={placingKind ? handleAddPinAt : undefined}
+          onAddPin={mode === "edit" && activeMap ? handleOpenPinKindModal : undefined}
+          onAddPinAt={placingKind && activeMap ? handleAddPinAt : undefined}
           placing={!!placingKind}
           placingKind={placingKind}
           draftPos={draftPos}
-          mapId={selectedMap?.id ?? null}
-          mapImageData={toPreviewUrl(selectedMap?.imageData ?? null)}
-          naturalWidth={selectedMap?.naturalWidth ?? 4096}
-          naturalHeight={selectedMap?.naturalHeight ?? 3072}
+          mapId={activeMap?.id ?? null}
+          mapImageData={toPreviewUrl(activeMap?.imageData ?? null)}
+          naturalWidth={activeMap?.naturalWidth ?? 4096}
+          naturalHeight={activeMap?.naturalHeight ?? 3072}
+          floors={floorOptions}
+          selectedFloorId={selectedFloorId}
+          onSelectFloor={handleSelectFloor}
           header={headerNode}
         />
       </div>
@@ -255,38 +558,61 @@ export default function AdminPage() {
           mode={sideMenuMode}
           onClose={closeSideMenu}
           mapEditProps={
-            sideMenuMode === "map" && selectedMap
+            sideMenuMode === "map" && mapEditTarget
               ? {
-                  mapId: selectedMap.id,
-                  initialName: selectedMap.name,
-                  initialImageUrl: toPreviewUrl(selectedMap.imageData ?? null),
+                  mapId: mapEditTarget.id,
+                  initialName: mapEditTarget.name,
+                  initialImageUrl: toPreviewUrl(mapEditTarget.imageData ?? null),
                   onSaved: async (updated) => {
-                    setMaps((prev) =>
-                      prev.map((m) =>
-                        m.id === updated.id
-                          ? { ...m, name: updated.name, imageData: updated.imageData ?? m.imageData }
-                          : m
+                    const normalized = normalizeMap(updated);
+                    applyMapUpdate(normalized);
+                    setFloorItems((prev) =>
+                      prev.map((f) =>
+                        f.id === normalized.id
+                          ? {
+                              ...f,
+                              name: normalized.name || f.name,
+                              map: { ...f.map, ...normalized },
+                            }
+                          : f
                       )
                     );
-                    setSelectedMap((prev) =>
-                      prev && prev.id === updated.id
-                        ? { ...prev, name: updated.name, imageData: updated.imageData ?? prev.imageData }
-                        : prev
-                    );
                     try {
-                      const res = await fetch(`${API}/maps/${updated.id}`, { credentials: "include" });
+                      const res = await fetch(`${API}/maps/${normalized.id}`, { credentials: "include" });
                       if (res.ok) {
-                        const m = await res.json();
-                        setMaps((prev) =>
-                          prev.map((x) => (x.id === m.id ? { ...x, ...m } : x))
+                        const fresh = normalizeMap(await res.json());
+                        applyMapUpdate(fresh);
+                        setFloorItems((prev) =>
+                          prev.map((f) =>
+                            f.id === fresh.id
+                              ? {
+                                  ...f,
+                                  name: fresh.name || f.name,
+                                  map: { ...f.map, ...fresh },
+                                }
+                              : f
+                          )
                         );
-                        setSelectedMap((prev) => (prev && prev.id === m.id ? { ...prev, ...m } : prev));
                       }
-                    } catch {}
+                    } catch (err) {
+                      console.warn("Failed to refresh map info after save:", err);
+                    }
+                    if (normalized.parentMapId || selectedMap?.id === mapEditTarget.id) {
+                      const parentId = normalized.parentMapId ?? selectedMap?.id ?? null;
+                      if (parentId) {
+                        await loadFloorStack(parentId, normalized.id);
+                      }
+                    }
                     closeSideMenu();
                   },
                   onDeleted: async (parentMapId) => {
-                    await goToMapId(parentMapId);
+                    if (parentMapId) {
+                      await goToMapId(parentMapId);
+                      await loadFloorStack(parentMapId);
+                    } else {
+                      setFloorItems([]);
+                      setSelectedFloorId(null);
+                    }
                     closeSideMenu();
                   },
                 }
@@ -294,7 +620,7 @@ export default function AdminPage() {
           }
           pinContext={{
             placingKind: placingKind,
-            mapId: selectedMap?.id ?? null,
+            mapId: activeMap?.id ?? null,
             draftPos: draftPos,
             onAreaCreated: appendAreaPin,
             onPlanCreated: appendPlanPin,
