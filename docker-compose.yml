@@ -61,10 +61,8 @@ services:
       target: dev           # ← devステージで next dev を動かす
     container_name: nutfesmap-web
     environment:
-      NODE_ENV: development
-      # ブラウザから叩く公開API（クライアント用）
-      NEXT_PUBLIC_API_BASE_URL: "http://localhost:8080"
-      # SSR/サーバーコンポーネント用に内部向けURLも用意（任意）
+      NODE_ENV: production
+      NEXT_PUBLIC_API_BASE_URL: "https://api.navifes.com"
       API_INTERNAL_BASE_URL: "http://nutfesmap-api:8080"
       # 変更検知を安定化
       CHOKIDAR_USEPOLLING: "true"
@@ -78,6 +76,21 @@ services:
     command: npm run dev -- -H 0.0.0.0
     depends_on:
       - nutfesmap-api
+
+  cloudflared:
+    image: cloudflare/cloudflared:2025.8.0
+    container_name: cloudflared
+    depends_on:
+      - nutfesmap-web
+      - nutfesmap-api
+    volumes:
+      - ./services/cloudflared/config.yml:/etc/cloudflared/config.yml:ro
+      - ./services/cloudflared/76614e39-6ea4-431e-a84c-571235b83321.json:/etc/cloudflared/76614e39-6ea4-431e-a84c-571235b83321.json:ro
+    environment:
+      - TUNNEL_TOKEN=   # 未使用（named tunnel運用のため）
+      - CLOUDFLARE_TUNNEL_ID=76614e39-6ea4-431e-a84c-571235b83321
+    command: tunnel run
+    restart: unless-stopped
 
 volumes:
   db_data:
