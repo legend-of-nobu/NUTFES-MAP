@@ -1,4 +1,6 @@
-# --- dev 用（今まで通りホットリロード） ---
+# services/nutfesmap-web/Dockerfile
+
+# --- dev 用（ホットリロード） ---
 FROM node:20-alpine AS dev
 WORKDIR /app
 COPY package*.json ./
@@ -7,11 +9,14 @@ COPY . .
 EXPOSE 3000
 CMD ["npm","run","dev","--","-H","0.0.0.0"]
 
-# --- prod 用（本番ビルド＆start） ---
+# --- prod 用（ビルド→start） ---
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
+# 環境変数（NEXT_PUBLIC_*）は build args で注入される想定
+ARG NEXT_PUBLIC_API_BASE_URL
+ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
 COPY . .
 RUN npm run build
 

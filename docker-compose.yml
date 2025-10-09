@@ -1,11 +1,11 @@
+# docker-compose.yml (dev)
 services:
   nutfesmap-database:
     image: mysql:8.0
     container_name: nutfesmap-database
-    env_file: services/nutfesmap-api/config/.env
+    env_file: services/nutfesmap-api/config/.env.dev          # ← dev用
     command: --default-authentication-plugin=mysql_native_password
-    ports:
-      - "3306:3306"
+    ports: ["3306:3306"]
     volumes:
       - db_data:/var/lib/mysql
       - ./services/nutfesmap-api/init:/docker-entrypoint-initdb.d:ro
@@ -21,7 +21,7 @@ services:
     depends_on:
       nutfesmap-database:
         condition: service_healthy
-    env_file: services/nutfesmap-api/config/.env
+    env_file: services/nutfesmap-api/config/.env.dev          # ← dev用
     volumes:
       - ./services/nutfesmap-api/migrations:/migrations:ro
       - ./services/nutfesmap-api/scripts/migrate.sh:/scripts/migrate.sh:ro
@@ -33,9 +33,8 @@ services:
       context: .
       dockerfile: services/nutfesmap-api/build/Dockerfile
     container_name: nutfesmap-api
-    env_file: services/nutfesmap-api/config/.env
-    ports:
-      - "8080:8080"
+    env_file: services/nutfesmap-api/config/.env.dev          # ← dev用
+    ports: ["8080:8080"]
     depends_on:
       nutfesmap-database:
         condition: service_healthy
@@ -45,8 +44,7 @@ services:
   nutfesmap-api-document:
     image: swaggerapi/swagger-ui:latest
     container_name: nutfesmap-api-document
-    ports:
-      - "9419:8080"
+    ports: ["9419:8080"]
     environment:
       SWAGGER_JSON: /swagger.yaml
     volumes:
@@ -58,21 +56,19 @@ services:
     build:
       context: ./services/nutfesmap-web
       dockerfile: Dockerfile
-      target: dev           # ← devステージで next dev を動かす
+      target: dev                                          # ← devステージ
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL}  # ← dev root .env から注入
     container_name: nutfesmap-web
+    env_file: services/nutfesmap-web/.env.dev              # ← dev用（ランタイム）
     environment:
-      NODE_ENV: production
-      NEXT_PUBLIC_API_BASE_URL: "https://api.navifes.com"
-      API_INTERNAL_BASE_URL: "http://nutfesmap-api:8080"
-      # 変更検知を安定化
       CHOKIDAR_USEPOLLING: "true"
       WATCHPACK_POLLING: "true"
-    ports:
-      - "3000:3000"
+    ports: ["3000:3000"]
     volumes:
-      - ./services/nutfesmap-web:/app   # ソースをマウント（必須）
-      - /app/node_modules               # コンテナ側を維持
-      - /app/.next                      # ビルドキャッシュをコンテナ側に
+      - ./services/nutfesmap-web:/app
+      - /app/node_modules
+      - /app/.next
     command: npm run dev -- -H 0.0.0.0
     depends_on:
       - nutfesmap-api
@@ -85,12 +81,10 @@ services:
       - nutfesmap-api
     volumes:
       - ./services/cloudflared/config.yml:/etc/cloudflared/config.yml:ro
-      - ./services/cloudflared/76614e39-6ea4-431e-a84c-571235b83321.json:/etc/cloudflared/76614e39-6ea4-431e-a84c-571235b83321.json:ro
-    environment:
-      - TUNNEL_TOKEN=   # 未使用（named tunnel運用のため）
-      - CLOUDFLARE_TUNNEL_ID=76614e39-6ea4-431e-a84c-571235b83321
-    command: tunnel run
+      - ./services/cloudflared/credentials.json:/etc/cloudflared/credentials.json:ro
+    command: tunnel --config /etc/cloudflared/config.yml run
     restart: unless-stopped
+
 
 volumes:
   db_data:
