@@ -1,0 +1,43 @@
+services:
+  nutfesmap-web:
+    build:
+      context: ./services/nutfesmap-web
+      dockerfile: Dockerfile
+      target: prod                # ← 本番ターゲット
+    environment:
+      NODE_ENV: "production"
+      NEXT_PUBLIC_API_BASE_URL: "https://api.navifes.com"
+      API_INTERNAL_BASE_URL: "http://nutfesmap-api:8080"
+    ports:
+      - "3000:3000"
+    # 本番はボリュームマウントしない（コード固定）
+    volumes: []
+    restart: unless-stopped
+    depends_on:
+      - nutfesmap-api
+
+  nutfesmap-api:
+    # 既存のビルド（Goのマルチステージ本番バイナリ）を想定
+    environment:
+      # CORS は本番のフロントだけ許可
+      CORS_ALLOW_ORIGINS: "https://app.navifes.com"
+      # セキュアCookie運用なら
+      COOKIE_SECURE: "true"
+      COOKIE_SAMESITE: "None"
+      # 逆プロキシヘッダを信頼（X-Forwarded-Protoなど）
+      TRUST_PROXY: "true"
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:2025.8.0
+    container_name: cloudflared
+    depends_on:
+      - nutfesmap-web
+      - nutfesmap-api
+    command: tunnel --config /etc/cloudflared/config.yml run
+    volumes:
+      - ./services/cloudflared/config.yml:/etc/cloudflared/config.yml:ro
+      - ./services/cloudflared/credentials.json:/etc/cloudflared/credentials.json:ro
+    restart: unless-stopped

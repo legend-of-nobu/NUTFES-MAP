@@ -767,6 +767,7 @@ export default function AdminPage() {
                     }
                     closeSideMenu();
                   },
+                  onClose: closeSideMenu,
                 }
               : undefined
           }

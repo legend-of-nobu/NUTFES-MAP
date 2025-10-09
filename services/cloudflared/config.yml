@@ -7,4 +7,9 @@ ingress:
     service: http://nutfesmap-web:3000
   - hostname: api.navifes.com
     service: http://nutfesmap-api:8080
+  # ステージングを使うなら下を有効化して別 compose（stg）で上げる
+  # - hostname: stg.navifes.com
+  #   service: http://stg-web:3000
+  # - hostname: stg-api.navifes.com
+  #   service: http://stg-api:8080
   - service: http_status:404
