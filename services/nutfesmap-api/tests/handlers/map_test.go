@@ -68,8 +68,6 @@ const insertEmptyMapSQL = "INSERT INTO maps (id, name, image_data, natural_width
 
 const parentCheckForUpdateSQL = "SELECT COUNT(*) FROM maps WHERE id = ? AND deleted_at IS NULL FOR UPDATE"
 
-const parentAggregateUpdateSQL = "UPDATE maps SET has_floors = TRUE, floor_count = floor_count + 1, modified_at = ? WHERE id = ? AND deleted_at IS NULL"
-
 const selectExistForDeleteSQL = "SELECT COUNT(*) FROM maps WHERE id = ? AND deleted_at IS NULL LIMIT 1"
 
 const deletePinsCascadeSQL = "WITH RECURSIVE submaps AS (SELECT id FROM maps WHERE id = ? AND deleted_at IS NULL UNION ALL SELECT m.id FROM maps m JOIN submaps s ON m.parent_map_id = s.id WHERE m.deleted_at IS NULL) DELETE p FROM pins p JOIN submaps sm ON p.map_id = sm.id"
@@ -166,7 +164,7 @@ func TestMapHandler_Create_WithParent_OK(t *testing.T) {
 		WithArgs("parent_1").
 		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(1))
 
-	// floor 行の INSERT（親ID設定, has_floors=false, floor_count=0）
+	// 子マップの INSERT（親ID設定, has_floors=false, floor_count=0）
 	mock.ExpectExec(insertEmptyMapSQL).
 		WithArgs(
 			sqlmock.AnyArg(), // id
@@ -178,11 +176,6 @@ func TestMapHandler_Create_WithParent_OK(t *testing.T) {
 			0,          // floor_count
 			sqlmock.AnyArg(), sqlmock.AnyArg(),
 		).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	// 親 root の集約値更新（has_floors=true, floor_count+1）
-	mock.ExpectExec(parentAggregateUpdateSQL).
-		WithArgs(sqlmock.AnyArg(), "parent_1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// コミット

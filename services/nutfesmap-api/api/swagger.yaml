@@ -229,10 +229,11 @@ paths:
   /maps:
     post:
       tags: ["Maps"]
-      summary: "マップ作成（root または floor）"
+      summary: "マップ作成（root または子マップ）"
       description: |
-        - `parentMapId=null` で **root** を作成。
-        - `parentMapId=<rootId>` で **floor** を1つ追加（空のマップ）。
+        - `parentMapId=null` で **root** を作成します。
+        - `parentMapId=<mapId>` で、指定したマップ配下に **空の子マップ** を1件作成します。
+        - フロアを追加したい場合は `/maps/{mapId}/floors` を利用してください。
       requestBody:
         required: true
         content:
@@ -702,7 +703,7 @@ components:
           example: 2
         children:
           type: array
-          description: "子（直下の floor）の軽量リスト"
+          description: "子（直下のマップ）の軽量リスト"
           items:
             type: object
             required: [id, name, hasFloors, floorCount]
@@ -735,7 +736,7 @@ components:
         parentMapId:
           type: string
           nullable: true
-          description: "nullならroot作成。root.idを指定すると“空の階”を1つ作成（親IDはroot.id）"
+          description: "null なら root を作成。値を指定すると、そのマップ配下に空の子マップを作成する"
           example: null
 
     MapUpdateRequest:

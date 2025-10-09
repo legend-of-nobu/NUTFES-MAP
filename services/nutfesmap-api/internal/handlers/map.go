@@ -39,6 +39,7 @@ func NewMapHandler(r *repository.MapRepository) *MapHandler {
 
 // POST /maps
 // 空のマップのみ作成。name / imageData / natural* / floors は受け付けない。
+// parentMapId を指定した場合は、そのマップ配下に空の子マップを生成する（階層情報は更新しない）。
 func (h *MapHandler) Create(c echo.Context) error {
 	var req MapCreateRequest
 	if err := c.Bind(&req); err != nil {

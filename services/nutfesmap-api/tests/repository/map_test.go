@@ -39,8 +39,6 @@ const rootExistLockSQL = "SELECT COUNT(*) FROM maps WHERE id = ? AND deleted_at 
 
 const insertMapSQL = "INSERT INTO maps (id, name, image_data, natural_width, natural_height, parent_map_id, has_floors, floor_count, created_at, modified_at) VALUES (?,?,?,?,?,?,?,?,?,?)"
 
-const incParentSQL = "UPDATE maps SET has_floors = TRUE, floor_count = floor_count + 1, modified_at = ? WHERE id = ? AND deleted_at IS NULL"
-
 const idxCountSQL_2 = "SELECT parent_map_id, COUNT(*) FROM maps WHERE deleted_at IS NULL AND parent_map_id IN (?,?) GROUP BY parent_map_id"
 
 const idxChildrenSQL_2 = "SELECT id, COALESCE(name, ''), has_floors, floor_count, parent_map_id FROM maps WHERE deleted_at IS NULL AND parent_map_id IN (?,?) ORDER BY name ASC"
@@ -91,7 +89,7 @@ const decRootFloorSQL = `
 	`
 
 // -----------------------------------------------------------------------------
-// CreateByRequest（/maps POST, /maps/{id}/floors POST の実体）
+// CreateByRequest（/maps POST の実体）
 // -----------------------------------------------------------------------------
 
 func TestMapRepository_CreateByRequest_CreateRoot_OK(t *testing.T) {
@@ -119,7 +117,7 @@ func TestMapRepository_CreateByRequest_CreateRoot_OK(t *testing.T) {
 	}
 }
 
-func TestMapRepository_CreateByRequest_CreateFloor_OK(t *testing.T) {
+func TestMapRepository_CreateByRequest_CreateChild_OK(t *testing.T) {
 	r, mock, cleanup := newMock(t)
 	defer cleanup()
 
@@ -133,20 +131,15 @@ func TestMapRepository_CreateByRequest_CreateFloor_OK(t *testing.T) {
 		WithArgs(rootID).
 		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(1))
 
-	// floor 行の INSERT（親ID設定, has_floors=false, floor_count=0）
+	// 子マップ行の INSERT（親ID設定, has_floors=false, floor_count=0）
 	mock.ExpectExec(insertMapSQL).
 		WithArgs(newID, "", nil, 0, 0, rootID, false, 0, sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	// 親 root の集約値更新（has_floors=true, floor_count+1）
-	mock.ExpectExec(incParentSQL).
-		WithArgs(sqlmock.AnyArg(), rootID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	mock.ExpectCommit()
 
 	if err := r.CreateByRequest(context.Background(), newID, &repository.MapCreateRequest{ParentMapID: &rootID}); err != nil {
-		t.Fatalf("CreateByRequest(floor) returned err: %v", err)
+		t.Fatalf("CreateByRequest(child) returned err: %v", err)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -641,17 +634,7 @@ func TestMapRepository_FindFloorStackByAnyID_AsRoot_OK(t *testing.T) {
 	mock.ExpectQuery(selectChildrenSQL).WithArgs(rootID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "has_floors", "floor_count"}))
 
-	// 2) root の aggregate（再読込） ← ★ここを新しい Rows にする
-	rootRow2 := sqlmock.NewRows(mainCols).AddRow(
-		rootID, "講義棟エリア", "IMG", 3000, 2000, nil, true, 3, now, now, nil,
-	)
-	mock.ExpectQuery(selectOneSQL).WithArgs(rootID).WillReturnRows(rootRow2)
-	mock.ExpectQuery(countChildrenSQL).WithArgs(rootID).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-	mock.ExpectQuery(selectChildrenSQL).WithArgs(rootID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "has_floors", "floor_count"}))
-
-	// 3) floors（created_at ASC）
+	// 2) floors（created_at ASC）
 	floorCols := []string{
 		"id", "name", "image_data", "natural_width", "natural_height",
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at",
@@ -759,17 +742,7 @@ func TestMapRepository_FindFloorStackByAnyID_NoFloors_OK(t *testing.T) {
 	mock.ExpectQuery(selectChildrenSQL).WithArgs(rootID).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "has_floors", "floor_count"}))
 
-	// 2) root aggregate（同じ root を再取得） ← ★新しい Rows
-	rootRow2 := sqlmock.NewRows(mainCols).AddRow(
-		rootID, "屋外エリア", "IMG", 2000, 1500, nil, false, 0, now, now, nil,
-	)
-	mock.ExpectQuery(selectOneSQL).WithArgs(rootID).WillReturnRows(rootRow2)
-	mock.ExpectQuery(countChildrenSQL).WithArgs(rootID).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-	mock.ExpectQuery(selectChildrenSQL).WithArgs(rootID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "has_floors", "floor_count"}))
-
-	// 3) floors は 0 件
+	// 2) floors は 0 件
 	floorCols := []string{
 		"id", "name", "image_data", "natural_width", "natural_height",
 		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at",
@@ -782,6 +755,66 @@ func TestMapRepository_FindFloorStackByAnyID_NoFloors_OK(t *testing.T) {
 		t.Fatalf("FindFloorStackByAnyID(root) err: %v", err)
 	}
 	if got == nil || got.RootMapID != rootID || got.FloorCount != 0 || len(got.Items) != 0 {
+		t.Fatalf("unexpected stack: %#v", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// FindFloorStackByAnyID（エリア: 親はあるが has_floors=false）
+// -----------------------------------------------------------------------------
+
+func TestMapRepository_FindFloorStackByAnyID_AreaChild_OK(t *testing.T) {
+	r, mock, cleanup := newMock(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	indexID := "index_root"
+	areaID := "area_child"
+
+	mainCols := []string{
+		"id", "name", "image_data", "natural_width", "natural_height",
+		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at", "deleted_at",
+	}
+
+	// 1) anyID=area の aggregate（親は index, has_floors=false）
+	areaRow := sqlmock.NewRows(mainCols).AddRow(
+		areaID, "講義棟エリア", "", 2048, 1536,
+		indexID, false, 0, now, now, nil,
+	)
+	mock.ExpectQuery(selectOneSQL).WithArgs(areaID).WillReturnRows(areaRow)
+	mock.ExpectQuery(countChildrenSQL).WithArgs(areaID).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery(selectChildrenSQL).WithArgs(areaID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "has_floors", "floor_count"}))
+
+	// 2) 親 index の aggregate（has_floors=false のため root には採用されない）
+	indexRow := sqlmock.NewRows(mainCols).AddRow(
+		indexID, "IndexMap", "", 4096, 3072,
+		nil, false, 0, now, now, nil,
+	)
+	mock.ExpectQuery(selectOneSQL).WithArgs(indexID).WillReturnRows(indexRow)
+	mock.ExpectQuery(countChildrenSQL).WithArgs(indexID).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery(selectChildrenSQL).WithArgs(indexID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "has_floors", "floor_count"}))
+
+	// 3) floors クエリは area 配下を対象とする
+	floorCols := []string{
+		"id", "name", "image_data", "natural_width", "natural_height",
+		"parent_map_id", "has_floors", "floor_count", "created_at", "modified_at",
+	}
+	floorRows := sqlmock.NewRows(floorCols).
+		AddRow("floor1", "1F", "", 0, 0, areaID, false, 0, now.Add(-time.Hour), now.Add(-time.Hour))
+	mock.ExpectQuery(floorsOfRootSQL).WithArgs(areaID).WillReturnRows(floorRows)
+
+	got, err := r.FindFloorStackByAnyID(context.Background(), areaID)
+	if err != nil {
+		t.Fatalf("FindFloorStackByAnyID(area) err: %v", err)
+	}
+	if got == nil || got.RootMapID != areaID || got.FloorCount != 1 {
 		t.Fatalf("unexpected stack: %#v", got)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

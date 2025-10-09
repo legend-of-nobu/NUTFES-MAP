@@ -181,7 +181,7 @@ func (r *MapRepository) CreateEmptyFloorTx(ctx context.Context, id string, floor
 	return tx.Commit()
 }
 
-// 仕様に合わせた入口: /maps POST および /maps/{id}/floors POST の実体
+// 仕様に合わせた入口: /maps POST の実体
 func (r *MapRepository) CreateByRequest(ctx context.Context, newID string, req *MapCreateRequest) error {
 	tx, err := r.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
@@ -208,7 +208,7 @@ func (r *MapRepository) CreateByRequest(ctx context.Context, newID string, req *
 		return tx.Commit()
 	}
 
-	// 親あり（=floor作成）。親の存在チェック + FOR UPDATE
+	// 親あり（=通常の子マップ作成）。親の存在チェック（存在しなければ404）
 	{
 		var cnt int
 		if err := tx.QueryRowContext(ctx,
@@ -228,15 +228,6 @@ func (r *MapRepository) CreateByRequest(ctx context.Context, newID string, req *
 	if _, err := tx.ExecContext(ctx,
 		"INSERT INTO maps (id, name, image_data, natural_width, natural_height, parent_map_id, has_floors, floor_count, created_at, modified_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
 		newID, "", nil, 0, 0, *req.ParentMapID, false, 0, now, now,
-	); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-
-	// 親の集約更新（has_floors=true, floor_count+1）
-	if _, err := tx.ExecContext(ctx,
-		"UPDATE maps SET has_floors = TRUE, floor_count = floor_count + 1, modified_at = ? WHERE id = ? AND deleted_at IS NULL",
-		now, *req.ParentMapID,
 	); err != nil {
 		_ = tx.Rollback()
 		return err
@@ -420,18 +411,21 @@ func (r *MapRepository) FindFloorStackByAnyID(ctx context.Context, anyID string)
 		return nil, nil
 	}
 
-	// 2) floorRoot を決定
-	//    - anyID が floor のとき: 親が root なので parent を root とする
-	//    - anyID が root のとき: そのまま anyID が root
+	// 2) floorRoot を決定する
+	//    - anyID が floor のとき: 親の has_floors が TRUE であれば親を root とする
+	//    - それ以外（親が floor container でない or 親が存在しない）場合は anyID を root とみなす
 	floorRootID := anyID
+	rootAg := ag
 	if ag.Base.ParentMapID != nil {
-		floorRootID = *ag.Base.ParentMapID
-	}
-
-	// 3) root 側の aggregate を「もう一度」読む（テストはここも期待している）
-	rootAg, err := r.FindAggregate(ctx, floorRootID)
-	if err != nil {
-		return nil, err
+		parentID := *ag.Base.ParentMapID
+		parentAg, err := r.FindAggregate(ctx, parentID)
+		if err != nil {
+			return nil, err
+		}
+		if parentAg != nil && parentAg.Base != nil && parentAg.Base.HasFloors {
+			floorRootID = parentID
+			rootAg = parentAg
+		}
 	}
 	if rootAg == nil || rootAg.Base == nil {
 		rootAg = ag

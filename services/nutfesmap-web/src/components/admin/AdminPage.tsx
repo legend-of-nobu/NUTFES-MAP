@@ -21,6 +21,23 @@ type MapType = {
   floorCount?: number;
 };
 
+type MapPatch = Partial<Omit<MapType, "id">> & { id: string };
+
+const mapShallowEqual = (a: MapType, b: MapType) =>
+  a.id === b.id &&
+  a.name === b.name &&
+  (a.imageData ?? null) === (b.imageData ?? null) &&
+  (a.naturalWidth ?? 0) === (b.naturalWidth ?? 0) &&
+  (a.naturalHeight ?? 0) === (b.naturalHeight ?? 0) &&
+  (a.parentMapId ?? null) === (b.parentMapId ?? null) &&
+  (a.hasFloors ?? false) === (b.hasFloors ?? false) &&
+  (a.floorCount ?? 0) === (b.floorCount ?? 0);
+
+const mergeMap = (original: MapType, patch: MapPatch): MapType => {
+  const merged: MapType = { ...original, ...patch };
+  return mapShallowEqual(original, merged) ? original : merged;
+};
+
 type PinKind = "area" | "plan";
 const API = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
@@ -28,6 +45,7 @@ export default function AdminPage() {
   const [maps, setMaps] = useState<MapType[]>([]);
   const [selectedMap, setSelectedMap] = useState<MapType | null>(null);
   const [floorItems, setFloorItems] = useState<Array<{ id: string; name: string; index: number; map: MapType }>>([]);
+  const [floorRoot, setFloorRoot] = useState<{ id: string; name: string } | null>(null);
   const [selectedFloorId, setSelectedFloorId] = useState<string | null>(null);
 
   const [planPins, setPlanPins] = useState<ApiPin[]>([]);
@@ -100,11 +118,18 @@ export default function AdminPage() {
       if (index === -1) {
         return [...prev, mapObj];
       }
+      const merged = mergeMap(prev[index], mapObj);
+      if (merged === prev[index]) {
+        return prev;
+      }
       const next = [...prev];
-      next[index] = { ...next[index], ...mapObj };
+      next[index] = merged;
       return next;
     });
-    setSelectedMap((prev) => (prev && prev.id === mapObj.id ? { ...prev, ...mapObj } : prev));
+    setSelectedMap((prev) => {
+      if (!prev || prev.id !== mapObj.id) return prev;
+      return mergeMap(prev, mapObj);
+    });
   }, []);
 
   const loadFloorStack = useCallback(
@@ -112,72 +137,133 @@ export default function AdminPage() {
       try {
         const res = await fetch(`${API}/maps/${mapId}/floors`, { credentials: "include" });
         if (!res.ok) {
+          setFloorRoot(null);
           setFloorItems([]);
           setSelectedFloorId(null);
           return [];
         }
         const payload = await res.json();
+        const rootId: string = typeof payload?.rootMapId === "string" && payload.rootMapId.length > 0
+          ? payload.rootMapId
+          : mapId;
+        const rootNameRaw: string = typeof payload?.rootName === "string" ? payload.rootName : "";
+        const rootName = rootNameRaw.trim();
+
         const rawItems: any[] = Array.isArray(payload?.items) ? payload.items : [];
         const floors = rawItems
           .map((item) => {
             const mapData = normalizeMap(item?.map);
             if (!mapData.id) return null;
-            const index = typeof item?.floorIndex === "number" ? item.floorIndex : 0;
-            const label =
-              mapData.name || (index > 0 ? `${index}F` : mapData.name || mapData.id);
+            const index = Number.isFinite(item?.floorIndex) ? Number(item.floorIndex) : 0;
             return {
               id: mapData.id,
-              name: label,
+              name: mapData.name,
               index,
               map: mapData,
             };
           })
-          .filter((item): item is { id: string; name: string; index: number; map: MapType } => !!item);
-        floors.sort((a, b) => {
-          if (a.index !== b.index) return b.index - a.index;
-          return a.name.localeCompare(b.name);
-        });
-
-        setFloorItems(floors);
-        setSelectedFloorId((prev) => {
-          const desiredId =
-            preferredFloorId && floors.some((f) => f.id === preferredFloorId)
-              ? preferredFloorId
-              : prev && floors.some((f) => f.id === prev)
-                ? prev
-                : floors[0]?.id ?? null;
-          return desiredId ?? null;
-        });
+          .filter(
+            (item): item is { id: string; name: string; index: number; map: MapType } =>
+              !!item && item.id.length > 0 && item.index >= 0
+          )
+          .sort((a, b) => {
+            if (a.index !== b.index) return a.index - b.index;
+            return a.id.localeCompare(b.id);
+          });
 
         const updatedCount =
           typeof payload?.floorCount === "number" ? payload.floorCount : floors.length;
         const hasFloorsFlag = updatedCount > 0;
 
-        setMaps((prev) => {
-          let next = prev.map((m) =>
-            m.id === mapId ? { ...m, floorCount: updatedCount, hasFloors: hasFloorsFlag } : m
-          );
-          floors.forEach(({ map }) => {
-            const idx = next.findIndex((m) => m.id === map.id);
-            if (idx === -1) {
-              next = [...next, map];
-            } else {
-              const clone = [...next];
-              clone[idx] = { ...clone[idx], ...map };
-              next = clone;
-            }
-          });
-          return next;
+        setFloorRoot(hasFloorsFlag ? { id: rootId, name: rootName } : null);
+        setFloorItems(floors);
+
+        const fallbackFloorId = floors[0]?.id ?? null;
+        const explicitPreferred =
+          preferredFloorId ?? (floors.some((f) => f.id === mapId) ? mapId : undefined);
+        setSelectedFloorId((prev) => {
+          const desiredId =
+            (explicitPreferred && floors.some((f) => f.id === explicitPreferred))
+              ? explicitPreferred
+              : prev && floors.some((f) => f.id === prev)
+                ? prev
+                : fallbackFloorId;
+          return desiredId ?? null;
         });
-        setSelectedMap((prev) =>
-          prev && prev.id === mapId
-            ? { ...prev, floorCount: updatedCount, hasFloors: hasFloorsFlag }
-            : prev
-        );
+
+        setMaps((prev) => {
+          let changed = false;
+          let next = prev;
+          const ensureCopy = () => {
+            if (next === prev) {
+              next = [...prev];
+            }
+          };
+          const upsert = (patch: MapPatch) => {
+            const idx = next.findIndex((m) => m.id === patch.id);
+            if (idx === -1) {
+              ensureCopy();
+              next.push({
+                id: patch.id,
+                name: patch.name ?? "",
+                imageData: patch.imageData ?? null,
+                naturalWidth: patch.naturalWidth ?? 0,
+                naturalHeight: patch.naturalHeight ?? 0,
+                parentMapId: patch.parentMapId ?? null,
+                hasFloors: patch.hasFloors ?? false,
+                floorCount: patch.floorCount ?? 0,
+              });
+              changed = true;
+            } else {
+              const merged = mergeMap(next[idx], patch);
+              if (merged !== next[idx]) {
+                ensureCopy();
+                next[idx] = merged;
+                changed = true;
+              }
+            }
+          };
+
+          const rootPatch: MapPatch = {
+            id: rootId,
+            hasFloors: hasFloorsFlag,
+            floorCount: updatedCount,
+          };
+          if (rootName) {
+            rootPatch.name = rootName;
+          }
+          upsert(rootPatch);
+          floors.forEach(({ map }) => {
+            upsert(map);
+          });
+
+          return changed ? next : prev;
+        });
+
+        setSelectedMap((prev) => {
+          if (!prev) return prev;
+          if (prev.id === rootId) {
+            const patch: MapPatch = {
+              id: rootId,
+              hasFloors: hasFloorsFlag,
+              floorCount: updatedCount,
+            };
+          if (rootName) {
+            patch.name = rootName;
+          }
+            return mergeMap(prev, patch);
+          }
+          const matchingFloor = floors.find((f) => f.id === prev.id);
+          if (matchingFloor) {
+            return mergeMap(prev, matchingFloor.map);
+          }
+          return prev;
+        });
 
         return floors;
       } catch (err) {
         console.error("Failed to load floors:", err);
+        setFloorRoot(null);
         setFloorItems([]);
         setSelectedFloorId(null);
         return [];
@@ -186,21 +272,28 @@ export default function AdminPage() {
     [API, normalizeMap]
   );
 
-  const activeMap = useMemo(() => {
-    if (!selectedMap) return null;
-    if (selectedMap.hasFloors) {
-      const floor =
-        floorItems.find((f) => f.id === (selectedFloorId ?? "")) ?? floorItems[0];
-      return floor?.map ?? null;
+  const activeFloor = useMemo(() => {
+    if (!floorItems.length) return null;
+    if (selectedFloorId) {
+      const current = floorItems.find((f) => f.id === selectedFloorId);
+      if (current) return current;
     }
+    return floorItems[0];
+  }, [floorItems, selectedFloorId]);
+
+  const activeMap = useMemo(() => {
+    if (activeFloor) return activeFloor.map;
     return selectedMap;
-  }, [selectedMap, floorItems, selectedFloorId]);
+  }, [activeFloor, selectedMap]);
 
   const floorOptions = useMemo(
     () =>
       floorItems.map((f) => ({
         id: f.id,
-        label: f.name || (f.index > 0 ? `${f.index}F` : f.id),
+        label:
+          f.index > 0
+            ? `${f.index}F`
+            : f.name || f.map.name || f.id,
       })),
     [floorItems]
   );
@@ -212,10 +305,44 @@ export default function AdminPage() {
     );
   }, [floorItems]);
 
-  const stairAddDisabled = !selectedMap;
+  const floorRootId = useMemo(() => {
+    if (floorRoot?.id) return floorRoot.id;
+    if (!selectedMap) return null;
+    if (selectedMap.hasFloors) return selectedMap.id;
+    if (selectedMap.parentMapId) {
+      const parent = maps.find((m) => m.id === selectedMap.parentMapId);
+      if (parent?.hasFloors) return parent.id;
+      return selectedMap.id;
+    }
+    return null;
+  }, [floorRoot?.id, maps, selectedMap]);
+
+  const stairAddDisabled =
+    !floorRootId || (!selectedMap?.hasFloors && !selectedMap?.parentMapId);
   const stairDeleteDisabled =
-    !selectedMap || !topFloorItem || selectedFloorId !== topFloorItem.id;
+    !floorRootId || !topFloorItem || selectedFloorId !== topFloorItem.id;
   const mapEditTarget = activeMap ?? selectedMap;
+
+  const displayTitle = useMemo(() => {
+    if (floorItems.length > 0 && activeFloor) {
+      let baseName = floorRoot?.name ?? "";
+      if (!baseName && floorRoot?.id) {
+        const rootEntry = maps.find((m) => m.id === floorRoot.id);
+        if (rootEntry?.name) {
+          baseName = rootEntry.name;
+        }
+      }
+      if (!baseName) {
+        baseName = selectedMap?.name ?? "未選択";
+      }
+      const floorNumber = activeFloor.index;
+      if (Number.isFinite(floorNumber) && floorNumber > 0) {
+        return `${baseName}/${floorNumber}階`;
+      }
+      return baseName;
+    }
+    return activeMap?.name ?? selectedMap?.name ?? "未選択";
+  }, [activeFloor, activeMap?.name, floorItems.length, floorRoot, maps, selectedMap?.name]);
 
   // 初期ロード：マップ一覧
   useEffect(() => {
@@ -240,19 +367,36 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (!selectedMap) {
+      setFloorRoot(null);
       setFloorItems([]);
       setSelectedFloorId(null);
       return;
     }
-    if (!selectedMap.hasFloors) {
+
+    const parentMap = selectedMap.parentMapId
+      ? maps.find((m) => m.id === selectedMap.parentMapId)
+      : null;
+
+    if (selectedMap.hasFloors) {
       setFloorItems([]);
       setSelectedFloorId(null);
+      setFloorRoot(null);
+      void loadFloorStack(selectedMap.id);
       return;
     }
+
+    if (parentMap?.hasFloors) {
+      setFloorItems([]);
+      setSelectedFloorId(selectedMap.id);
+      setFloorRoot(null);
+      void loadFloorStack(parentMap.id, selectedMap.id);
+      return;
+    }
+
+    setFloorRoot(null);
     setFloorItems([]);
     setSelectedFloorId(null);
-    void loadFloorStack(selectedMap.id);
-  }, [loadFloorStack, selectedMap?.hasFloors, selectedMap?.id]);
+  }, [loadFloorStack, maps, selectedMap]);
 
   // ピン一覧
   useEffect(() => {
@@ -331,12 +475,13 @@ export default function AdminPage() {
   }, []);
 
   const handleStairAdd = useCallback(async () => {
-    if (!selectedMap) {
+    const targetId = floorRoot?.id ?? selectedMap?.id ?? null;
+    if (!targetId) {
       alert("階を追加するマップが選択されていません。");
       return;
     }
     try {
-      const res = await fetch(`${API}/maps/${encodeURIComponent(selectedMap.id)}/floors`, {
+      const res = await fetch(`${API}/maps/${encodeURIComponent(targetId)}/floors`, {
         method: "POST",
         credentials: "include",
       });
@@ -347,8 +492,8 @@ export default function AdminPage() {
       }
       const created = await res.json();
       const newFloorId: string | null = created?.id ?? null;
-      const nextIndex =
-        Math.max(topFloorItem?.index ?? 0, selectedMap.floorCount ?? floorItems.length) + 1;
+      const highestIndex = floorItems.reduce((max, f) => Math.max(max, f.index), 0);
+      const nextIndex = highestIndex + 1;
       const nextName = `${nextIndex}F`;
       if (newFloorId) {
         try {
@@ -362,16 +507,16 @@ export default function AdminPage() {
           console.warn("階名の更新に失敗しました:", err);
         }
       }
-      await loadFloorStack(selectedMap.id, newFloorId);
-      applyMapUpdate({ ...selectedMap, hasFloors: true });
+      await loadFloorStack(targetId, newFloorId);
     } catch (err) {
       console.error(err);
       alert("階の追加に失敗しました。ログを確認してください。");
     }
-  }, [API, applyMapUpdate, floorItems.length, loadFloorStack, selectedMap, topFloorItem]);
+  }, [API, floorItems, floorRoot?.id, loadFloorStack, selectedMap?.id]);
 
   const handleStairDelete = useCallback(async () => {
-    if (!selectedMap) {
+    const targetId = floorRoot?.id ?? selectedMap?.id ?? null;
+    if (!targetId) {
       alert("階を削除するマップが選択されていません。");
       return;
     }
@@ -383,23 +528,26 @@ export default function AdminPage() {
       alert("削除できるのは一番上の階のみです。");
       return;
     }
-    if (!confirm(`「${topFloorItem.name}」を削除しますか？`)) return;
+    if (!confirm(`「${topFloorItem.index}階」を削除しますか？`)) return;
     try {
-      const res = await fetch(`${API}/maps/${encodeURIComponent(topFloorItem.id)}`, {
-        method: "DELETE",
-        credentials: "include",
-      });
+      const res = await fetch(
+        `${API}/maps/${encodeURIComponent(targetId)}/floors/${topFloorItem.index}`,
+        {
+          method: "DELETE",
+          credentials: "include",
+        }
+      );
       if (!res.ok) {
         const text = await res.text();
         alert(`階の削除に失敗しました: ${res.status} ${text}`);
         return;
       }
-      await loadFloorStack(selectedMap.id);
+      await loadFloorStack(targetId);
     } catch (err) {
       console.error(err);
       alert("階の削除に失敗しました。ログを確認してください。");
     }
-  }, [API, loadFloorStack, selectedFloorId, selectedMap, topFloorItem]);
+  }, [API, floorRoot?.id, loadFloorStack, selectedFloorId, selectedMap?.id, topFloorItem]);
 
   // PlanPin 選択
   const handlePlanPinSelect = (spot: SpotData & { id?: string }) => {
@@ -495,11 +643,7 @@ export default function AdminPage() {
   const headerNode = useMemo(
     () => (
       <AdminHeader
-        currentMapName={
-          selectedMap?.hasFloors && activeMap
-            ? `${selectedMap.name} / ${activeMap.name}`
-            : activeMap?.name ?? selectedMap?.name ?? "未選択"
-        }
+        currentMapName={displayTitle}
         mode={mode}
         onModeChange={(m) => setMode(m)}
         onMapEdit={openMapEdit}
@@ -510,13 +654,11 @@ export default function AdminPage() {
       />
     ),
     [
-      activeMap?.name,
+      displayTitle,
       handleStairAdd,
       handleStairDelete,
       mode,
       openMapEdit,
-      selectedMap?.hasFloors,
-      selectedMap?.name,
       stairAddDisabled,
       stairDeleteDisabled,
     ]
@@ -577,6 +719,11 @@ export default function AdminPage() {
                           : f
                       )
                     );
+                    setFloorRoot((prev) =>
+                      prev && prev.id === normalized.id
+                        ? { ...prev, name: normalized.name ?? prev.name }
+                        : prev
+                    );
                     try {
                       const res = await fetch(`${API}/maps/${normalized.id}`, { credentials: "include" });
                       if (res.ok) {
@@ -592,6 +739,11 @@ export default function AdminPage() {
                                 }
                               : f
                           )
+                        );
+                        setFloorRoot((prev) =>
+                          prev && prev.id === fresh.id
+                            ? { ...prev, name: fresh.name ?? prev.name }
+                            : prev
                         );
                       }
                     } catch (err) {
