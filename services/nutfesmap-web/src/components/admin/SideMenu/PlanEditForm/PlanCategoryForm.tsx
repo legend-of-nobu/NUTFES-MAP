@@ -2,6 +2,7 @@
 import React from "react";
 import  "../FormStyle.css";
 import  "../Style.css";
+import  { Category } from "@/types/enums";
 
 type PlanCategoryFormProps = {
   value: string;
@@ -14,12 +15,12 @@ export default function PlanCategoryForm({ value, onChange }: PlanCategoryFormPr
       <label className="Label">カテゴリ</label>
       <select
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => onChange(e.target.value as Category)}
         className="categorySelect">
         <option value="">選択してください</option>
-        <option value="food">飲食</option>
-        <option value="plan">企画</option>
-        <option value="forChild">子供向け</option>
+        <option value="{Category.Food}">{Category.Food}</option>
+        <option value="{Category.Plan}">{Category.Plan}</option>
+        <option value="{Category.Child}">{Category.Child}</option>
       </select>
     </div>
   );
