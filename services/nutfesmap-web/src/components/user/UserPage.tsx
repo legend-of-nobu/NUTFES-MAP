@@ -1,12 +1,10 @@
 "use client";
+
 import { useCallback, useEffect, useMemo, useState } from "react";
-import AdminHeader from "./AdminHeader";
-import MapHeader from "./MapHeader";
-import Map from "./Map";
-import PinKindSelectModal from "./PinKindSelectModal";
-import SideMenu from "./SideMenu/SideMenu";
-import { toPreviewUrl } from "./SideMenu/MapEditForm/base64";
+import MapHeader from "../admin/MapHeader";
+import Map from "../admin/Map";
 import PlanSpotBottomSheet from "@/components/map/PlanSpotBottomSheet";
+import { toPreviewUrl } from "../admin/SideMenu/MapEditForm/base64";
 import type { ApiPin, SpotData } from "@/components/map/PlanPin";
 import type { ApiAreaPin } from "@/components/map/AreaPin";
 
@@ -38,45 +36,19 @@ const mergeMap = (original: MapType, patch: MapPatch): MapType => {
   return mapShallowEqual(original, merged) ? original : merged;
 };
 
-type PinKind = "area" | "plan";
 const API = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
-export default function AdminPage() {
+export default function UserPage() {
   const [maps, setMaps] = useState<MapType[]>([]);
   const [selectedMap, setSelectedMap] = useState<MapType | null>(null);
-  const [floorItems, setFloorItems] = useState<Array<{ id: string; name: string; index: number; map: MapType }>>([]);
   const [floorRoot, setFloorRoot] = useState<{ id: string; name: string } | null>(null);
+  const [floorItems, setFloorItems] = useState<
+    Array<{ id: string; name: string; index: number; map: MapType }>
+  >([]);
   const [selectedFloorId, setSelectedFloorId] = useState<string | null>(null);
 
   const [planPins, setPlanPins] = useState<ApiPin[]>([]);
   const [areaPins, setAreaPins] = useState<ApiAreaPin[]>([]);
-
-  const [mode, setMode] = useState<"edit" | "user">("edit");
-
-  const [sideMenuMode, setSideMenuMode] = useState<"map" | "plan" | "area" | null>(null);
-  const [editAreaTarget, setEditAreaTarget] = useState<{ id: string; initialName: string } | null>(null);
-  const [editPlanTarget, setEditPlanTarget] = useState<ApiPin | null>(null);
-
-  const openMapEdit = () => {
-    if (!mapEditTarget) {
-      alert("編集するマップを先に選択してください。");
-      return;
-    }
-    setSideMenuMode("map");
-  };
-  const closeSideMenu = () => {
-    setSideMenuMode(null);
-    setPlacingKind(null);
-    setDraftPos(null);
-    setEditAreaTarget(null);
-    setEditPlanTarget(null);
-  };
-
-  const [showPinKindModal, setShowPinKindModal] = useState(false);
-  const [selectedKind, setSelectedKind] = useState<PinKind | null>(null);
-
-  const [placingKind, setPlacingKind] = useState<PinKind | null>(null);
-  const [draftPos, setDraftPos] = useState<{ xNorm: number; yNorm: number } | null>(null);
 
   const [isSheetOpen, setIsSheetOpen] = useState(false);
   const [selectedSpot, setSelectedSpot] = useState<SpotData | null>(null);
@@ -248,9 +220,9 @@ export default function AdminPage() {
               hasFloors: hasFloorsFlag,
               floorCount: updatedCount,
             };
-          if (rootName) {
-            patch.name = rootName;
-          }
+            if (rootName) {
+              patch.name = rootName;
+            }
             return mergeMap(prev, patch);
           }
           const matchingFloor = floors.find((f) => f.id === prev.id);
@@ -290,20 +262,10 @@ export default function AdminPage() {
     () =>
       floorItems.map((f) => ({
         id: f.id,
-        label:
-          f.index > 0
-            ? `${f.index}F`
-            : f.name || f.map.name || f.id,
+        label: f.index > 0 ? `${f.index}F` : f.name || f.map.name || f.id,
       })),
     [floorItems]
   );
-
-  const topFloorItem = useMemo(() => {
-    if (!floorItems.length) return null;
-    return floorItems.reduce((prev, current) =>
-      current.index > prev.index ? current : prev
-    );
-  }, [floorItems]);
 
   const floorRootId = useMemo(() => {
     if (floorRoot?.id) return floorRoot.id;
@@ -316,12 +278,6 @@ export default function AdminPage() {
     }
     return null;
   }, [floorRoot?.id, maps, selectedMap]);
-
-  const stairAddDisabled =
-    !floorRootId || (!selectedMap?.hasFloors && !selectedMap?.parentMapId);
-  const stairDeleteDisabled =
-    !floorRootId || !topFloorItem || selectedFloorId !== topFloorItem.id;
-  const mapEditTarget = activeMap ?? selectedMap;
 
   const displayTitle = useMemo(() => {
     if (floorItems.length > 0 && activeFloor) {
@@ -344,7 +300,6 @@ export default function AdminPage() {
     return activeMap?.name ?? selectedMap?.name ?? "未選択";
   }, [activeFloor, activeMap?.name, floorItems.length, floorRoot, maps, selectedMap?.name]);
 
-  // 初期ロード：マップ一覧
   useEffect(() => {
     (async () => {
       try {
@@ -398,7 +353,6 @@ export default function AdminPage() {
     setSelectedFloorId(null);
   }, [loadFloorStack, maps, selectedMap]);
 
-  // ピン一覧
   useEffect(() => {
     const targetMapId = activeMap?.id ?? null;
     if (!targetMapId) {
@@ -449,151 +403,36 @@ export default function AdminPage() {
     })();
   }, [activeMap?.id]);
 
-  useEffect(() => {
-    setDraftPos(null);
-  }, [activeMap?.id]);
-
-  // 「＋ピン」
-  const handleOpenPinKindModal = () => { setSelectedKind(null); setShowPinKindModal(true); };
-  const handleConfirmPinKind = () => {
-    if (!selectedKind) return;
-    setPlacingKind(selectedKind);
-    setDraftPos(null);
-    setShowPinKindModal(false);
-  };
-
-  // MapImage 内クリックで座標確定
-  const handleAddPinAt = (xNorm: number, yNorm: number) => {
-    if (draftPos) return;
-    if (!placingKind || !activeMap) return;
-    setDraftPos({ xNorm, yNorm });
-    setSideMenuMode(placingKind); // "area" or "plan"
-  };
-
-  const handleSelectFloor = useCallback((floorId: string) => {
-    setSelectedFloorId(floorId);
-  }, []);
-
-  const handleStairAdd = useCallback(async () => {
-    const targetId = floorRoot?.id ?? selectedMap?.id ?? null;
-    if (!targetId) {
-      alert("階を追加するマップが選択されていません。");
-      return;
-    }
-    try {
-      const res = await fetch(`${API}/maps/${encodeURIComponent(targetId)}/floors`, {
-        method: "POST",
-        credentials: "include",
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        alert(`階の追加に失敗しました: ${res.status} ${text}`);
+  const goToMapId = useCallback(
+    async (mapId: string) => {
+      const existing = maps.find((m) => m.id === mapId);
+      if (existing) {
+        setSelectedMap(existing);
         return;
       }
-      const created = await res.json();
-      const newFloorId: string | null = created?.id ?? null;
-      const highestIndex = floorItems.reduce((max, f) => Math.max(max, f.index), 0);
-      const nextIndex = highestIndex + 1;
-      const nextName = `${nextIndex}F`;
-      if (newFloorId) {
-        try {
-          await fetch(`${API}/maps/${encodeURIComponent(newFloorId)}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            credentials: "include",
-            body: JSON.stringify({ name: nextName }),
-          });
-        } catch (err) {
-          console.warn("階名の更新に失敗しました:", err);
+      try {
+        const res = await fetch(`${API}/maps/${mapId}`, { credentials: "include" });
+        if (!res.ok) {
+          const fallback: MapType = {
+            id: mapId,
+            name: "",
+            imageData: null,
+            naturalWidth: 0,
+            naturalHeight: 0,
+            parentMapId: null,
+            hasFloors: false,
+            floorCount: 0,
+          };
+          applyMapUpdate(fallback);
+          setSelectedMap(fallback);
+          return;
         }
-      }
-      await loadFloorStack(targetId, newFloorId);
-    } catch (err) {
-      console.error(err);
-      alert("階の追加に失敗しました。ログを確認してください。");
-    }
-  }, [API, floorItems, floorRoot?.id, loadFloorStack, selectedMap?.id]);
-
-  const handleStairDelete = useCallback(async () => {
-    const targetId = floorRoot?.id ?? selectedMap?.id ?? null;
-    if (!targetId) {
-      alert("階を削除するマップが選択されていません。");
-      return;
-    }
-    if (!topFloorItem) {
-      alert("削除できる階がありません。");
-      return;
-    }
-    if (selectedFloorId !== topFloorItem.id) {
-      alert("削除できるのは一番上の階のみです。");
-      return;
-    }
-    if (!confirm(`「${topFloorItem.index}階」を削除しますか？`)) return;
-    try {
-      const res = await fetch(
-        `${API}/maps/${encodeURIComponent(targetId)}/floors/${topFloorItem.index}`,
-        {
-          method: "DELETE",
-          credentials: "include",
-        }
-      );
-      if (!res.ok) {
-        const text = await res.text();
-        alert(`階の削除に失敗しました: ${res.status} ${text}`);
-        return;
-      }
-      await loadFloorStack(targetId);
-    } catch (err) {
-      console.error(err);
-      alert("階の削除に失敗しました。ログを確認してください。");
-    }
-  }, [API, floorRoot?.id, loadFloorStack, selectedFloorId, selectedMap?.id, topFloorItem]);
-
-  // PlanPin 選択
-  const handlePlanPinSelect = (spot: SpotData & { id?: string }) => {
-    if (mode === "edit") {
-      // 念のため、ボトムシートを閉じてからサイドメニューに切替
-      setIsSheetOpen(false);
-      setSelectedSpot(null);
-
-      const t = spot.id ? planPins.find((p) => p.id === spot.id) : undefined;
-      if (t) {
-        setEditPlanTarget(t);
-        setSideMenuMode("plan");
-        return;
-      }
-    }
-    // Userモード：従来どおりボトムシート
-    setSelectedSpot(spot);
-    setIsSheetOpen(true);
-  };
-
-  // AreaPin 選択（モード別）
-  const handleAreaPinSelect = async (area: ApiAreaPin) => {
-    if (mode === "edit") {
-      setEditAreaTarget({ id: area.id, initialName: area.name });
-      setSideMenuMode("area");
-      return;
-    }
-    if (!area.linkToMapId) return;
-    await goToMapId(area.linkToMapId);
-  };
-
-  // 親マップへ戻る
-  const handleBackToParent = async () => {
-    const parentId = selectedMap?.parentMapId;
-    if (!parentId) return;
-    await goToMapId(parentId);
-  };
-
-  // マップ遷移（必要時 GET /maps/{id}）
-  const goToMapId = async (mapId: string) => {
-    const existing = maps.find((m) => m.id === mapId);
-    if (existing) { setSelectedMap(existing); return; }
-    try {
-      const res = await fetch(`${API}/maps/${mapId}`, { credentials: "include" });
-      if (!res.ok) {
-        const fallback = {
+        const m = await res.json();
+        const mapObj = normalizeMap(m);
+        applyMapUpdate(mapObj);
+        setSelectedMap(mapObj);
+      } catch {
+        const fallback: MapType = {
           id: mapId,
           name: "",
           imageData: null,
@@ -605,69 +444,35 @@ export default function AdminPage() {
         };
         applyMapUpdate(fallback);
         setSelectedMap(fallback);
-        return;
       }
-      const m = await res.json();
-      const mapObj = normalizeMap(m);
-      applyMapUpdate(mapObj);
-      setSelectedMap(mapObj);
-    } catch {
-      const fallback = {
-        id: mapId,
-        name: "",
-        imageData: null,
-        naturalWidth: 0,
-        naturalHeight: 0,
-        parentMapId: null,
-        hasFloors: false,
-        floorCount: 0,
-      };
-      applyMapUpdate(fallback);
-      setSelectedMap(fallback);
-    }
+    },
+    [applyMapUpdate, maps, normalizeMap]
+  );
+
+  const handlePlanPinSelect = (spot: SpotData & { id?: string }) => {
+    setSelectedSpot(spot);
+    setIsSheetOpen(true);
   };
 
-  // 作成/更新/削除のローカル反映
-  const appendAreaPin = (p: ApiAreaPin) => setAreaPins((prev) => [...prev, p]);
-  const updateAreaPinLocal = (p: ApiAreaPin) =>
-    setAreaPins((prev) => prev.map((x) => (x.id === p.id ? { ...x, name: p.name } : x)));
-  const removeAreaPinLocal = (pinId: string) =>
-    setAreaPins((prev) => prev.filter((x) => x.id !== pinId));
+  const handleAreaPinSelect = async (area: ApiAreaPin) => {
+    if (!area.linkToMapId) return;
+    await goToMapId(area.linkToMapId);
+  };
 
-  const appendPlanPin = (p: ApiPin) => setPlanPins((prev) => [...prev, p]);
-  const updatePlanPinLocal = (p: ApiPin) =>
-    setPlanPins((prev) => prev.map((x) => (x.id === p.id ? { ...x, ...p } : x)));
-  const removePlanPinLocal = (pinId: string) =>
-    setPlanPins((prev) => prev.filter((x) => x.id !== pinId));
+  const handleBackToParent = async () => {
+    const parentId = selectedMap?.parentMapId;
+    if (!parentId) return;
+    await goToMapId(parentId);
+  };
 
-  const headerNode = useMemo(
-    () => (
-      <AdminHeader
-        currentMapName={displayTitle}
-        mode={mode}
-        onModeChange={(m) => setMode(m)}
-        onMapEdit={openMapEdit}
-        onStairAdd={handleStairAdd}
-        onStairDelete={handleStairDelete}
-        disableStairAdd={stairAddDisabled}
-        disableStairDelete={stairDeleteDisabled}
-      />
-    ),
-    [
-      displayTitle,
-      handleStairAdd,
-      handleStairDelete,
-      mode,
-      openMapEdit,
-      stairAddDisabled,
-      stairDeleteDisabled,
-    ]
-  );
+  const handleSelectFloor = useCallback((floorId: string) => {
+    setSelectedFloorId(floorId);
+  }, []);
 
   return (
     <div className="flex flex-col h-screen bg-[#f5f0dc]">
       <MapHeader
-        mapName={selectedMap?.name ?? ""}
+        mapName={displayTitle}
         parentMapId={selectedMap?.parentMapId ?? null}
         onBack={handleBackToParent}
       />
@@ -676,14 +481,9 @@ export default function AdminPage() {
         <Map
           pins={planPins}
           areaPins={areaPins}
-          mode={mode}
+          mode="user"
           onPlanPinSelect={handlePlanPinSelect}
           onAreaPinSelect={handleAreaPinSelect}
-          onAddPin={mode === "edit" && activeMap ? handleOpenPinKindModal : undefined}
-          onAddPinAt={placingKind && activeMap ? handleAddPinAt : undefined}
-          placing={!!placingKind}
-          placingKind={placingKind}
-          draftPos={draftPos}
           mapId={activeMap?.id ?? null}
           mapImageData={toPreviewUrl(activeMap?.imageData ?? null)}
           naturalWidth={activeMap?.naturalWidth ?? 4096}
@@ -691,115 +491,14 @@ export default function AdminPage() {
           floors={floorOptions}
           selectedFloorId={selectedFloorId}
           onSelectFloor={handleSelectFloor}
-          header={headerNode}
         />
       </div>
 
-      {sideMenuMode && (
-        <SideMenu
-          mode={sideMenuMode}
-          onClose={closeSideMenu}
-          mapEditProps={
-            sideMenuMode === "map" && mapEditTarget
-              ? {
-                  mapId: mapEditTarget.id,
-                  initialName: mapEditTarget.name,
-                  initialImageUrl: toPreviewUrl(mapEditTarget.imageData ?? null),
-                  onSaved: async (updated) => {
-                    const normalized = normalizeMap(updated);
-                    applyMapUpdate(normalized);
-                    setFloorItems((prev) =>
-                      prev.map((f) =>
-                        f.id === normalized.id
-                          ? {
-                              ...f,
-                              name: normalized.name || f.name,
-                              map: { ...f.map, ...normalized },
-                            }
-                          : f
-                      )
-                    );
-                    setFloorRoot((prev) =>
-                      prev && prev.id === normalized.id
-                        ? { ...prev, name: normalized.name ?? prev.name }
-                        : prev
-                    );
-                    try {
-                      const res = await fetch(`${API}/maps/${normalized.id}`, { credentials: "include" });
-                      if (res.ok) {
-                        const fresh = normalizeMap(await res.json());
-                        applyMapUpdate(fresh);
-                        setFloorItems((prev) =>
-                          prev.map((f) =>
-                            f.id === fresh.id
-                              ? {
-                                  ...f,
-                                  name: fresh.name || f.name,
-                                  map: { ...f.map, ...fresh },
-                                }
-                              : f
-                          )
-                        );
-                        setFloorRoot((prev) =>
-                          prev && prev.id === fresh.id
-                            ? { ...prev, name: fresh.name ?? prev.name }
-                            : prev
-                        );
-                      }
-                    } catch (err) {
-                      console.warn("Failed to refresh map info after save:", err);
-                    }
-                    if (normalized.parentMapId || selectedMap?.id === mapEditTarget.id) {
-                      const parentId = normalized.parentMapId ?? selectedMap?.id ?? null;
-                      if (parentId) {
-                        await loadFloorStack(parentId, normalized.id);
-                      }
-                    }
-                    closeSideMenu();
-                  },
-                  onDeleted: async (parentMapId) => {
-                    if (parentMapId) {
-                      await goToMapId(parentMapId);
-                      await loadFloorStack(parentMapId);
-                    } else {
-                      setFloorItems([]);
-                      setSelectedFloorId(null);
-                    }
-                    closeSideMenu();
-                  },
-                }
-              : undefined
-          }
-          pinContext={{
-            placingKind: placingKind,
-            mapId: activeMap?.id ?? null,
-            draftPos: draftPos,
-            onAreaCreated: appendAreaPin,
-            onPlanCreated: appendPlanPin,
-          }}
-          editAreaPin={editAreaTarget}
-          onAreaUpdated={updateAreaPinLocal}
-          onAreaDeleted={removeAreaPinLocal}
-          // プラン編集の受け渡し
-          editPlanPin={editPlanTarget}
-          onPlanUpdated={(p) => {
-            updatePlanPinLocal(p);
-          }}
-          onPlanDeleted={(pinId) => {
-            removePlanPinLocal(pinId);
-          }}
-        />
-      )}
-
-      <PinKindSelectModal
-        visible={showPinKindModal}
-        selected={selectedKind}
-        onSelect={(kind) => setSelectedKind(kind as PinKind)}
-        onConfirm={handleConfirmPinKind}
-        onCancel={() => { setShowPinKindModal(false); setSelectedKind(null); }}
+      <PlanSpotBottomSheet
+        isOpen={isSheetOpen}
+        spotData={selectedSpot}
+        onClose={() => setIsSheetOpen(false)}
       />
-
-      <PlanSpotBottomSheet isOpen={isSheetOpen} spotData={selectedSpot} onClose={() => setIsSheetOpen(false)} />
     </div>
   );
 }

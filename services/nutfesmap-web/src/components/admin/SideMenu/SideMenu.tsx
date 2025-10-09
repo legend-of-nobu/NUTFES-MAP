@@ -24,6 +24,12 @@ type SideMenuProps = {
   // 既存エリアピン編集用
   editAreaPin?: { id: string; initialName: string } | null;
   onAreaUpdated?: (p: ApiAreaPin) => void;
+  onAreaDeleted?: (pinId: string) => void;
+
+  // 追加: 既存プランピン編集用
+  editPlanPin?: ApiPin | null;
+  onPlanUpdated?: (p: ApiPin) => void;
+  onPlanDeleted?: (pinId: string) => void;
 };
 
 export default function SideMenu({
@@ -33,8 +39,11 @@ export default function SideMenu({
   pinContext,
   editAreaPin,
   onAreaUpdated,
+  onAreaDeleted,
+  editPlanPin,
+  onPlanUpdated,
+  onPlanDeleted,
 }: SideMenuProps) {
-  // 「map」モードなのに props が無い = フォーム未初期化 → アラート表示して閉じる
   useEffect(() => {
     if (mode === "map" && !mapEditProps) {
       alert("編集対象のマップが未選択です。");
@@ -47,26 +56,41 @@ export default function SideMenu({
       {mode === "plan" && (
         <PlanEditForm
           onClose={onClose}
-          context={{
-            mapId: pinContext?.mapId ?? null,
-            draftPos: pinContext?.draftPos ?? null,
-            onCreated: pinContext?.onPlanCreated,
-          }}
+          // 既存編集が指定されている場合は edit を渡す
+          edit={
+            editPlanPin && pinContext?.mapId
+              ? {
+                  mapId: pinContext.mapId,
+                  pin: editPlanPin,
+                  onUpdated: onPlanUpdated,
+                  onDeleted: onPlanDeleted,
+                }
+              : undefined
+          }
+          // 既存編集が無ければ新規作成（placingフロー）のコンテキスト
+          context={
+            !editPlanPin
+              ? {
+                  mapId: pinContext?.mapId ?? null,
+                  draftPos: pinContext?.draftPos ?? null,
+                  onCreated: pinContext?.onPlanCreated,
+                }
+              : undefined
+          }
         />
       )}
 
       {mode === "area" && (
         <AreaEditForm
           onClose={onClose}
-          // 新規作成（placing時）に使用
           context={{
             mapId: pinContext?.mapId ?? null,
             draftPos: pinContext?.draftPos ?? null,
             onCreated: pinContext?.onAreaCreated,
           }}
-          // 既存編集（Editモードでピンをクリック時）に使用
           editPin={editAreaPin ?? undefined}
           onUpdated={onAreaUpdated}
+          onDeleted={onAreaDeleted}
         />
       )}
 

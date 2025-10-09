@@ -28,9 +28,11 @@ type Props = {
   editPin?: EditPin;
   /** 既存ピン更新後に親へ反映（名称変更） */
   onUpdated?: (p: ApiAreaPin) => void;
+  /** 既存ピン削除後に親へ通知 */
+  onDeleted?: (pinId: string) => void;
 };
 
-export const AreaEditForm: React.FC<Props> = ({ onClose, context, editPin, onUpdated }) => {
+export const AreaEditForm: React.FC<Props> = ({ onClose, context, editPin, onUpdated, onDeleted }) => {
   const isEditing = !!editPin;
   const [areaName, setAreaName] = useState(isEditing ? editPin!.initialName : "");
   const [saving, setSaving] = useState(false);
@@ -148,6 +150,30 @@ export const AreaEditForm: React.FC<Props> = ({ onClose, context, editPin, onUpd
     alert("必要な情報が不足しています。");
   };
 
+  const handleDelete = async () => {
+    if (!isEditing || !editPin) return;
+    if (!confirm("このエリアピンを削除しますか？")) return;
+
+    try {
+      setSaving(true);
+      const res = await fetch(`${API}/pins/${encodeURIComponent(editPin.id)}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(`DELETE /pins/${editPin.id} 失敗: ${res.status} ${t}`);
+      }
+      onDeleted?.(editPin.id);
+      onClose();
+    } catch (e) {
+      console.error(e);
+      alert("エリアピンの削除に失敗しました。ログを確認してください。");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="container">
       <CloseButton onClick={onClose} />
@@ -157,7 +183,7 @@ export const AreaEditForm: React.FC<Props> = ({ onClose, context, editPin, onUpd
 
       <div className="buttonRow">
         <SaveButton onClick={handleSave} disabled={saving} />
-        <DeleteButton />
+        <DeleteButton onClick={isEditing ? handleDelete : undefined} disabled={!isEditing || saving} />
       </div>
     </div>
   );

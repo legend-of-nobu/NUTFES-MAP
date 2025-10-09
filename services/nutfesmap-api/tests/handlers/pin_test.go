@@ -48,9 +48,9 @@ func setupEchoWithMockPin(t *testing.T) (*echo.Echo, sqlmock.Sqlmock, func()) {
 const selectPinsByMapSQL = `
 		SELECT
 		  id, map_id, name, description, description_image,
-		  type, link_to_map_id, x_norm, y_norm,
+		  type, link_to_map_id, x_norm, y_norm, place,
 		  category, status, wait_minutes, created_at, modified_at
-		FROM pins
+	FROM pins
 		WHERE map_id = ? 
 		ORDER BY modified_at DESC, id ASC
 	`
@@ -58,9 +58,9 @@ const selectPinsByMapSQL = `
 const selectPinByIDSQL = `
 		SELECT
 		  id, map_id, name, description, description_image,
-		  type, link_to_map_id, x_norm, y_norm,
+		  type, link_to_map_id, x_norm, y_norm, place,
 		  category, status, wait_minutes, created_at, modified_at
-		FROM pins
+	FROM pins
 		WHERE id = ?
 		LIMIT 1
 	`
@@ -68,9 +68,9 @@ const selectPinByIDSQL = `
 const insertPinSQL = `
 		INSERT INTO pins (
 		  id, map_id, name, description, description_image,
-		  type, link_to_map_id, x_norm, y_norm,
+		  type, link_to_map_id, x_norm, y_norm, place,
 		  category, status, wait_minutes, created_at, modified_at
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 	`
 
 // ------------------------------------------------------------
@@ -84,15 +84,15 @@ func TestPinHandler_ListByMap_OK_SortedAndETag(t *testing.T) {
 	now := time.Now().UTC()
 	cols := []string{
 		"id", "map_id", "name", "description", "description_image",
-		"type", "link_to_map_id", "x_norm", "y_norm",
+		"type", "link_to_map_id", "x_norm", "y_norm", "place",
 		"category", "status", "wait_minutes", "created_at", "modified_at",
 	}
 	// 並びは modified_at DESC / id ASC だが、ハンドラーで Name 昇順に安定化
 	rows := sqlmock.NewRows(cols).
 		AddRow("p2", "m1", "Zulu", sql.NullString{Valid: false}, sql.NullString{Valid: false},
-			"exhibit", sql.NullString{Valid: false}, 0.6, 0.1, "other", "open", 0, now, now).
+			"exhibit", sql.NullString{Valid: false}, 0.6, 0.1, sql.NullString{Valid: true, String: "会場B"}, "other", "open", 0, now, now).
 		AddRow("p1", "m1", "Alpha", sql.NullString{Valid: false}, sql.NullString{Valid: false},
-			"info", sql.NullString{Valid: false}, 0.2, 0.3, "service", "paused", 3, now, now)
+			"info", sql.NullString{Valid: false}, 0.2, 0.3, sql.NullString{Valid: true, String: "会場A"}, "service", "paused", 3, now, now)
 
 	mock.ExpectQuery(selectPinsByMapSQL).
 		WithArgs("m1").
@@ -155,6 +155,7 @@ func TestPinHandler_CreateOnMap_OK(t *testing.T) {
 		"name":     "受付",
 		"xNorm":    0.4,
 		"yNorm":    0.8,
+		"place":    "学生ホール",
 		"category": "service",
 		"type":     "info",
 		"status":   "open",
@@ -164,20 +165,21 @@ func TestPinHandler_CreateOnMap_OK(t *testing.T) {
 	// INSERT（newID は uuid のため AnyArg でマッチ）
 	mock.ExpectExec(insertPinSQL).
 		WithArgs(sqlmock.AnyArg(), "m1", "受付", (*string)(nil), (*string)(nil),
-			"info", (*string)(nil), 0.4, 0.8, "service", "open", 0, sqlmock.AnyArg(), sqlmock.AnyArg()).
+			"info", (*string)(nil), 0.4, 0.8, "学生ホール", "service", "open", 0, sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// 再取得（ID は new_pin として返却してOK）
 	now := time.Now().UTC()
 	cols := []string{
 		"id", "map_id", "name", "description", "description_image",
-		"type", "link_to_map_id", "x_norm", "y_norm",
+		"type", "link_to_map_id", "x_norm", "y_norm", "place",
 		"category", "status", "wait_minutes", "created_at", "modified_at",
 	}
 	row := sqlmock.NewRows(cols).
 		AddRow("new_pin", "m1", "受付",
 			sql.NullString{Valid: false}, sql.NullString{Valid: false},
 			"info", sql.NullString{Valid: false}, 0.4, 0.8,
+			sql.NullString{Valid: true, String: "学生ホール"},
 			"service", "open", 0, now, now)
 
 	mock.ExpectQuery(selectPinByIDSQL).
@@ -199,7 +201,7 @@ func TestPinHandler_CreateOnMap_OK(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatalf("json error: %v", err)
 	}
-	if created.ID != "new_pin" || created.MapID != "m1" || created.Type != "info" || created.Category != "service" {
+	if created.ID != "new_pin" || created.MapID != "m1" || created.Type != "info" || created.Category != "service" || created.Place == nil || *created.Place != "学生ホール" {
 		t.Fatalf("unexpected created: %+v", created)
 	}
 
@@ -256,12 +258,12 @@ func TestPinHandler_Show_OK(t *testing.T) {
 	now := time.Now().UTC()
 	cols := []string{
 		"id", "map_id", "name", "description", "description_image",
-		"type", "link_to_map_id", "x_norm", "y_norm",
+		"type", "link_to_map_id", "x_norm", "y_norm", "place",
 		"category", "status", "wait_minutes", "created_at", "modified_at",
 	}
 	row := sqlmock.NewRows(cols).
 		AddRow("p1", "m1", "受付", sql.NullString{Valid: false}, sql.NullString{Valid: false},
-			"info", sql.NullString{Valid: false}, 0.4, 0.8, "service", "open", 0, now, now)
+			"info", sql.NullString{Valid: false}, 0.4, 0.8, sql.NullString{Valid: true, String: "学生ホール"}, "service", "open", 0, now, now)
 
 	mock.ExpectQuery(selectPinByIDSQL).
 		WithArgs("p1").
@@ -279,7 +281,7 @@ func TestPinHandler_Show_OK(t *testing.T) {
 	}
 	var got repository.PinResponse
 	_ = json.Unmarshal(rec.Body.Bytes(), &got)
-	if got.ID != "p1" || got.Name != "受付" {
+	if got.ID != "p1" || got.Name != "受付" || got.Place == nil || *got.Place != "学生ホール" {
 		t.Fatalf("unexpected body: %+v", got)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -293,7 +295,7 @@ func TestPinHandler_Show_NotFound(t *testing.T) {
 
 	cols := []string{
 		"id", "map_id", "name", "description", "description_image",
-		"type", "link_to_map_id", "x_norm", "y_norm",
+		"type", "link_to_map_id", "x_norm", "y_norm", "place",
 		"category", "status", "wait_minutes", "created_at", "modified_at",
 	}
 	mock.ExpectQuery(selectPinByIDSQL).
@@ -344,27 +346,27 @@ func TestPinHandler_Update_OK(t *testing.T) {
 	now := time.Now().UTC()
 	cols := []string{
 		"id", "map_id", "name", "description", "description_image",
-		"type", "link_to_map_id", "x_norm", "y_norm",
+		"type", "link_to_map_id", "x_norm", "y_norm", "place",
 		"category", "status", "wait_minutes", "created_at", "modified_at",
 	}
 	curRow := sqlmock.NewRows(cols).
 		AddRow("p1", "m1", "旧名", sql.NullString{Valid: true, String: "説明"},
 			sql.NullString{Valid: false}, "exhibit", sql.NullString{Valid: false},
-			0.1, 0.2, "food", "open", 0, now.Add(-time.Hour), now.Add(-time.Hour))
+			0.1, 0.2, sql.NullString{Valid: true, String: "旧エリア"}, "food", "open", 0, now.Add(-time.Hour), now.Add(-time.Hour))
 	mock.ExpectQuery(selectPinByIDSQL).
 		WithArgs("p1").
 		WillReturnRows(curRow)
 
-	// 2) UPDATE（name, description=NULL, x_norm, status, wait_minutes）
-	updateSQL := "UPDATE pins SET name = ?, description = NULL, x_norm = ?, status = ?, wait_minutes = ?, modified_at = ? WHERE id = ?"
+	// 2) UPDATE（name, description=NULL, x_norm, place, status, wait_minutes）
+	updateSQL := "UPDATE pins SET name = ?, description = NULL, x_norm = ?, place = ?, status = ?, wait_minutes = ?, modified_at = ? WHERE id = ?"
 	mock.ExpectExec(updateSQL).
-		WithArgs("新名", 0.3, "paused", 10, sqlmock.AnyArg(), "p1").
+		WithArgs("新名", 0.3, "新エリア", "paused", 10, sqlmock.AnyArg(), "p1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// 3) 再取得
 	afterRow := sqlmock.NewRows(cols).
 		AddRow("p1", "m1", "新名", sql.NullString{Valid: false}, sql.NullString{Valid: false},
-			"exhibit", sql.NullString{Valid: false}, 0.3, 0.2, "food", "paused", 10, now, now.Add(time.Minute))
+			"exhibit", sql.NullString{Valid: false}, 0.3, 0.2, sql.NullString{Valid: true, String: "新エリア"}, "food", "paused", 10, now, now.Add(time.Minute))
 	mock.ExpectQuery(selectPinByIDSQL).
 		WithArgs("p1").
 		WillReturnRows(afterRow)
@@ -373,6 +375,7 @@ func TestPinHandler_Update_OK(t *testing.T) {
 		"name":        "新名",
 		"description": nil, // NULL 指定
 		"xNorm":       0.3,
+		"place":       "新エリア",
 		"status":      "paused",
 		"waitMinutes": 10,
 	}
@@ -391,7 +394,7 @@ func TestPinHandler_Update_OK(t *testing.T) {
 	}
 	var got repository.PinResponse
 	_ = json.Unmarshal(rec.Body.Bytes(), &got)
-	if got.Name != "新名" || got.Status != "paused" || got.WaitMinutes != 10 || got.XNorm != 0.3 {
+	if got.Name != "新名" || got.Status != "paused" || got.WaitMinutes != 10 || got.XNorm != 0.3 || got.Place == nil || *got.Place != "新エリア" {
 		t.Fatalf("unexpected updated: %+v", got)
 	}
 
@@ -406,7 +409,7 @@ func TestPinHandler_Update_NotFound(t *testing.T) {
 
 	cols := []string{
 		"id", "map_id", "name", "description", "description_image",
-		"type", "link_to_map_id", "x_norm", "y_norm",
+		"type", "link_to_map_id", "x_norm", "y_norm", "place",
 		"category", "status", "wait_minutes", "created_at", "modified_at",
 	}
 	mock.ExpectQuery(selectPinByIDSQL).
@@ -434,12 +437,12 @@ func TestPinHandler_Update_ValidationError(t *testing.T) {
 	now := time.Now().UTC()
 	cols := []string{
 		"id", "map_id", "name", "description", "description_image",
-		"type", "link_to_map_id", "x_norm", "y_norm",
+		"type", "link_to_map_id", "x_norm", "y_norm", "place",
 		"category", "status", "wait_minutes", "created_at", "modified_at",
 	}
 	curRow := sqlmock.NewRows(cols).
 		AddRow("p1", "m1", "旧名", sql.NullString{Valid: false}, sql.NullString{Valid: false},
-			"exhibit", sql.NullString{Valid: false}, 0.1, 0.2, "food", "open", 0, now, now)
+			"exhibit", sql.NullString{Valid: false}, 0.1, 0.2, sql.NullString{Valid: false}, "food", "open", 0, now, now)
 	mock.ExpectQuery(selectPinByIDSQL).
 		WithArgs("p1").
 		WillReturnRows(curRow)

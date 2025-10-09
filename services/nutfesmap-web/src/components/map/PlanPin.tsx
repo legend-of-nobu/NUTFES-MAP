@@ -11,7 +11,7 @@ export interface SpotData {
   title: string;
   category: Category;
   time: string;
-  location: string;
+  place: string;
   description: string;
   imageUrl: string;
 }
@@ -27,6 +27,7 @@ export type ApiPin = {
   linkToMapId: string | null;
   xNorm: number; // 0..1
   yNorm: number; // 0..1
+  place: string | null;
   category: string;
   status: "open" | "paused" | "closed";
   waitMinutes: number;
@@ -65,12 +66,13 @@ type PlanPinProps = {
 const PlanPin: React.FC<PlanPinProps> = ({ pin, onSelect, ghost = false }) => {
   const catEnum = toCategoryEnum(pin.category);
   const CategoryIcon = categoryIcons[catEnum] ?? FaBuildingColumns;
+  const placeLabel = pin.place?.trim() || `(${(pin.xNorm * 100).toFixed(1)}%, ${(pin.yNorm * 100).toFixed(1)}%)`;
 
   const spotData: SpotData = {
     title: pin.name,
     category: catEnum,
     time: pin.waitMinutes > 0 ? `${pin.waitMinutes}分待ち` : "待ちなし",
-    location: `(${(pin.xNorm * 100).toFixed(1)}%, ${(pin.yNorm * 100).toFixed(1)}%)`,
+    place: placeLabel,
     description: pin.description ?? "",
     imageUrl: toDataUrlOrEmpty(pin.descriptionImageData),
   };

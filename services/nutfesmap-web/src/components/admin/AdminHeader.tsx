@@ -9,6 +9,8 @@ type Props = {
   onMapEdit: () => void;
   onStairAdd: () => void;
   onStairDelete: () => void;
+  disableStairAdd?: boolean;
+  disableStairDelete?: boolean;
 };
 
 export default function AdminHeader({
@@ -18,6 +20,8 @@ export default function AdminHeader({
   onMapEdit,
   onStairAdd,
   onStairDelete,
+  disableStairAdd = false,
+  disableStairDelete = false,
 }: Props) {
   return (
     <header className="flex flex-col items-start gap-3 px-4 py-3 bg-transparent">
@@ -46,6 +50,7 @@ export default function AdminHeader({
                 onClick={onStairAdd}
                 fullWidth={false}
                 icon={<FaCirclePlus />}
+                disabled={disableStairAdd}
               />
 
               {/* 左下：マップ編集 */}
@@ -63,6 +68,7 @@ export default function AdminHeader({
                 onClick={onStairDelete}
                 fullWidth={false}
                 icon={<FaCircleXmark />}
+                disabled={disableStairDelete}
               />
             </>
           )}

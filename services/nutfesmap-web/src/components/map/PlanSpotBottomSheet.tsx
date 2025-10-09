@@ -72,11 +72,11 @@ export default function PlanSpotBottomSheet({ isOpen, onClose, spotData }: Props
 
                 <div className="w-1/2">
                   <span>場所</span>
-                  <div className="flex items-center justify-center w-full gap-2 py-3 mt-1 rounded-lg bg-planning-details">
-                    <VscLocation size={28} />
-                    <span>{spotData.location}</span>
-                  </div>
-                </div>
+              <div className="flex items-center justify-center w-full gap-2 py-3 mt-1 rounded-lg bg-planning-details">
+                <VscLocation size={28} />
+                <span>{spotData.place || "場所未設定"}</span>
+              </div>
+            </div>
               </div>
 
               {/* 説明文 */}
